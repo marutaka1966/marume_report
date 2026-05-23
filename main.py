@@ -40,4 +40,6 @@ with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.send_message(msg)
 
 print("メール送信完了")
+print(os.environ["print("メール送信完了")
 print(os.environ["GMAIL_USER"])
+raise Exception("STOP")
