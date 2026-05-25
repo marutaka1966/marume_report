@@ -21,6 +21,7 @@ def get_worldmonitor():
     return "\n".join(texts)
 
 worldmonitor_data = get_worldmonitor()
+print(worldmonitor_data)
 prompt = f"""
 丸目さん専用の投資・世界情勢レポートを作ってください。
 以下のWorld Monitor取得データを最優先で使ってください。
