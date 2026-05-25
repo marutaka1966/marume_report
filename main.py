@@ -18,6 +18,8 @@ def get_news():
         "海運 紅海 ホルムズ海峡",
         "銅価格 商社",
         "日本株 三井物産 商船三井 NTT",
+        "NVIDIA Palantir Tesla Iridium Roblox",
+        "任天堂 DeNA KeePer技研 フツパー タイミー",
     ]
 
     news_items = []
@@ -25,14 +27,12 @@ def get_news():
     for q in queries:
         try:
             encoded_q = quote(q)
-
             url = (
                 f"https://news.google.com/rss/search?"
                 f"q={encoded_q}&hl=ja&gl=JP&ceid=JP:ja"
             )
 
             feed = feedparser.parse(url)
-
             news_items.append(f"\n【検索テーマ】{q}")
 
             for entry in feed.entries[:5]:
@@ -47,9 +47,7 @@ def get_news():
                 )
 
         except Exception as e:
-            news_items.append(
-                f"【検索テーマ】{q} 取得失敗: {e}"
-            )
+            news_items.append(f"【検索テーマ】{q} 取得失敗: {e}")
 
     return "\n".join(news_items)
 
@@ -73,16 +71,38 @@ prompt = f"""
 ニュース:
 {news_data}
 
-保有株：
+日本株保有：
+148A ハッチ・ワーク
+215A タイミー
 2432 DeNA
-4784 GMO系
+3491 GA technologies
+4579 ラクオリア創薬
+4784 GMOインターネット
+478A フツパー
+556A 犬猫生活
+5726 大阪チタニウム
 6036 KeePer技研
+7974 任天堂
 8031 三井物産
 8424 芙蓉総合リース
 8729 ソニーFG
 9104 商船三井
 9331 キャスター
 9432 NTT
+
+米国株保有：
+IRDM Iridium Communications
+PLTR Palantir
+RBLX Roblox
+TSLA Tesla
+NVDA NVIDIA
+
+投信保有：
+SBI日本高配当株式ファンド
+eMAXIS Slim 米国株式 S&P500
+eMAXIS Slim 全世界株式 オール・カントリー
+SBIゴールドファンド 為替ヘッジあり
+iTrustインド株式
 
 重点テーマ：
 AI
@@ -95,6 +115,11 @@ LNG
 EV
 Tesla
 データセンター
+宇宙通信
+小型グロース
+高配当
+インド株
+ゴールド
 
 地政学：
 イラン
@@ -104,6 +129,9 @@ Tesla
 米金利
 為替
 原油
+LNG
+紅海
+ホルムズ海峡
 
 出力形式：
 
@@ -121,12 +149,26 @@ Tesla
 
 # 6. 今日の実務判断
 
-# 7. 保有株別サマリー
-
-以下の表形式で必ず出力してください。
+# 7. 日本株別サマリー
 
 | No | コード | 略称 | 判断 | サマリー |
 |----|------|------|------|------|
+
+日本株17銘柄すべてを表に入れてください。
+
+# 8. 米国株別サマリー
+
+| No | ティッカー | 略称 | 判断 | サマリー |
+|----|------|------|------|------|
+
+米国株5銘柄すべてを表に入れてください。
+
+# 9. 投信別サマリー
+
+| No | ファンド | 判断 | サマリー |
+|----|------|------|------|
+
+投信5本すべてを表に入れてください。
 
 判断は必ず
 - 買い
@@ -137,18 +179,6 @@ Tesla
 のいずれか。
 
 サマリーは20文字以内で簡潔に。
-
-対象銘柄：
-
-1. 2432 DeNA
-2. 4784 GMO系
-3. 6036 KeePer
-4. 8031 三井物産
-5. 8424 芙蓉リース
-6. 8729 ソニーFG
-7. 9104 商船三井
-8. 9331 キャスター
-9. 9432 NTT
 
 日本語で。
 結論を最初に。
