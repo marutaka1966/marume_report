@@ -1,34 +1,51 @@
 import os
 import smtplib
-import requests
+import feedparser
 from email.mime.text import MIMEText
 from openai import OpenAI
 
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-def get_worldmonitor():
-    urls = [
-        "https://api.worldmonitor.app/api/news/v1/list-feed-digest",
+
+
+def get_news():
+    queries = [
+        "イラン 原油 LNG",
+        "台湾海峡 半導体",
+        "AI 半導体 データセンター",
+        "Tesla EV",
+        "海運 紅海 ホルムズ海峡",
+        "銅価格 商社",
+        "日本株 三井物産 商船三井 NTT",
     ]
 
-    texts = []
-    for url in urls:
-        try:
-            r = requests.get(url, timeout=20)
-            texts.append(r.text[:4000])
-        except Exception as e:
-            texts.append(f"World Monitor取得エラー: {e}")
+    news_items = []
 
-    return "\n".join(texts)
+    for q in queries:
+        url = f"https://news.google.com/rss/search?q={q}&hl=ja&gl=JP&ceid=JP:ja"
+        feed = feedparser.parse(url)
 
-worldmonitor_data = get_worldmonitor()
-print(worldmonitor_data)
+        news_items.append(f"\n【検索テーマ】{q}")
+
+        for entry in feed.entries[:5]:
+            title = entry.get("title", "")
+            link = entry.get("link", "")
+            published = entry.get("published", "")
+            news_items.append(f"- {title}\n  {published}\n  {link}")
+
+    return "\n".join(news_items)
+
+
+news_data = get_news()
+
 prompt = f"""
 丸目さん専用の投資・世界情勢レポートを作ってください。
-以下のWorld Monitor取得データを最優先で使ってください。
-一般論は禁止。取得データに基づいて、保有株への影響を判断してください。
 
-World Monitorデータ：
-{worldmonitor_data}
+以下の最新ニュースRSSを最優先で使ってください。
+一般論は禁止。ニュースに基づいて、保有株への影響を判断してください。
+
+最新ニュース：
+{news_data}
+
 監視対象：
 日本株：2432, 4784, 6036, 8031, 8424, 8729, 9104, 9331, 9432, NTT
 テーマ：AI、半導体、ロボット、銅、LNG、原発、海運、EV、Tesla、データセンター
