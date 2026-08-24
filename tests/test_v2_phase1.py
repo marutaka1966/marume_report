@@ -109,7 +109,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(bad.verdict, "WAIT")
         buf = io.StringIO()
         with redirect_stdout(buf):
-            out = run_phase1(decisions=[bad])
+            out = run_phase1(decisions=[bad], log_dir=False)
         self.assertEqual(out[0]["verdict"], "WAIT")
         self.assertIn("MAIL_SUPPRESSED", buf.getvalue())
 
@@ -123,7 +123,7 @@ class EngineTests(unittest.TestCase):
         )
         buf = io.StringIO()
         with redirect_stdout(buf):
-            out = run_phase1(decisions=[go])
+            out = run_phase1(decisions=[go], log_dir=False)
         self.assertEqual(out[0]["verdict"], "GO")
         self.assertIn("MAIL_WOULD_SEND", buf.getvalue())
 
@@ -132,7 +132,7 @@ class EngineTests(unittest.TestCase):
     def test_phase1_two_targets(self, *_mocks):
         buf = io.StringIO()
         with redirect_stdout(buf):
-            out = run_phase1()
+            out = run_phase1(log_dir=False)
         self.assertEqual(len(out), 2)
         self.assertEqual(out[0]["test_id"], "ATTACK #001")
         self.assertEqual(out[1]["test_id"], "DEFENSE #001")

@@ -21,7 +21,8 @@ def require_valid_verdict(verdict: str) -> str:
 def safe_verdict(verdict: str) -> str:
     """Safety remap for Decision construction.
 
-    Invalid labels become WAIT only. This must never map to GO, ALERT, or EXIT.
+    Invalid labels become WAIT only. This must never map to GO, ALERT,
+    EXIT, WATCH, or GO_CANDIDATE.
     Callers that need a hard failure should use require_valid_verdict().
     """
     if verdict in VALID_VERDICTS:
@@ -44,6 +45,9 @@ class Decision:
     entry_price: float | None = None
     do_not_chase_above: float | None = None
     checked_at: str = ""
+    indicators: dict[str, Any] = field(default_factory=dict)
+    missing: list[str] = field(default_factory=list)
+    inputs_used: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.checked_at:

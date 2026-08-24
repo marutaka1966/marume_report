@@ -8,7 +8,8 @@ import urllib.request
 
 from v2 import DATA_UNAVAILABLE
 
-YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
+# 3mo daily bars: enough for SMA(20) and RSI(14). Do not invent missing bars.
+YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=3mo"
 
 # Gold fund NAV ticker is unconfirmed in AI-Knowledge. Gold price uses futures.
 SYMBOLS = {
@@ -44,6 +45,8 @@ def fetch_quote(symbol: str) -> dict | None:
             "price": price,
             "change_pct": change_pct,
             "volume": volumes[-1] if volumes else None,
+            "closes": closes,
+            "volumes": volumes,
         }
     except (KeyError, IndexError, TypeError):
         return None

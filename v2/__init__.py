@@ -1,5 +1,6 @@
-"""V2 Phase 1: Investment Intelligence Engine (dry-run)."""
+"""V2 Phase 1–2: Investment Intelligence Engine (dry-run)."""
 
-VALID_VERDICTS = ("GO", "WAIT", "ALERT", "EXIT")
-MAIL_VERDICTS = ("GO", "ALERT", "EXIT")
+VALID_VERDICTS = ("GO", "WAIT", "WATCH", "ALERT", "EXIT", "GO_CANDIDATE")
+MAIL_VERDICTS = ("GO", "ALERT", "EXIT", "GO_CANDIDATE")
+LIVE_VERDICTS = ("WAIT", "WATCH", "ALERT", "GO_CANDIDATE")
 DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
