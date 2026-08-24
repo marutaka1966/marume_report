@@ -1,10 +1,14 @@
-"""Conservative evaluator. Never fabricates GO. Unknown → WAIT."""
+"""Conservative evaluator. Never fabricates GO. Unknown → WAIT.
+
+Phase3-A: evaluate confirmed Test IDs only. Read Watchlist, do not write it.
+Live ceiling is GO_CANDIDATE. No orders.
+"""
 
 from __future__ import annotations
 
 from v2 import DATA_UNAVAILABLE, LIVE_VERDICTS
 from v2.schema import Decision
-from v2.targets import ATTACK_001, DEFENSE_001, KB_FILES
+from v2.targets import ATTACK_001, DEFENSE_001, KB_FILES, is_confirmed_test_id
 
 IREN_CHECKS = (
     "latest_price",
@@ -36,9 +40,7 @@ def evaluate_attack_iren(kb, market: dict, indicators: dict | None = None) -> De
     reasons: list[str] = []
     risks: list[str] = ["do_not_chase", "high_risk_test_capital_only"]
     missing = _missing_kb(kb) + _missing_quote(market.get("IREN"), "IREN")
-    watch = kb.text("Projects/Investment/Watchlist.md") if kb.available else ""
-    if kb.available and "ATTACK #001" not in watch and "IREN" not in watch:
-        missing.append("watchlist_iren")
+    missing.extend(_missing_confirmed_watchlist(kb, target["test_id"], "watchlist_iren"))
 
     iren = market.get("IREN") or {}
     sharp_move = False
@@ -94,9 +96,7 @@ def evaluate_defense_gold(kb, market: dict, indicators: dict | None = None) -> D
     reasons: list[str] = []
     risks: list[str] = ["avoid_chase_after_spike"]
     missing = _missing_kb(kb) + _missing_quote(market.get("GOLD"), "GOLD")
-    watch = kb.text("Projects/Investment/Watchlist.md") if kb.available else ""
-    if kb.available and "DEFENSE #001" not in watch and "ゴールドファンド" not in watch:
-        missing.append("watchlist_gold")
+    missing.extend(_missing_confirmed_watchlist(kb, target["test_id"], "watchlist_gold"))
 
     gold = market.get("GOLD") or {}
     sharp_move = False
@@ -167,6 +167,8 @@ def _phase2_verdict(
 
 
 def _cap_live(verdict: str) -> str:
+    if verdict == "GO":
+        return "WAIT"
     if verdict in LIVE_VERDICTS:
         return verdict
     return "WAIT"
@@ -185,8 +187,16 @@ def _decision(
     missing: list[str],
     inputs_used: list[str],
 ) -> Decision:
+    if not is_confirmed_test_id(target["test_id"]):
+        missing = ["unconfirmed_test_id", *missing]
+        verdict = "WAIT"
+        confidence = 0
+        reason = [DATA_UNAVAILABLE, "unconfirmed_test_id", *reason]
     capped = _cap_live(verdict)
-    if capped != verdict:
+    if capped == "GO":
+        capped = "WAIT"
+        reason = ["LIVE_GO_FORBIDDEN", *reason]
+    elif capped != verdict:
         reason = ["LIVE_GO_FORBIDDEN", *reason]
     return Decision(
         test_id=target["test_id"],
@@ -254,6 +264,18 @@ def _inputs_used(kb, market: dict, indicators: dict | None, quote_keys: tuple[st
             if value is not None:
                 used.append(key)
     return used
+
+
+def _missing_confirmed_watchlist(kb, test_id: str, missing_key: str) -> list[str]:
+    """WAIT if Watchlist lacks the confirmed Test ID. Does not create the note."""
+    if not getattr(kb, "available", False):
+        return []
+    if not is_confirmed_test_id(test_id):
+        return ["unconfirmed_test_id"]
+    has_test_id = getattr(kb, "has_test_id", None)
+    if callable(has_test_id) and not has_test_id(test_id):
+        return [missing_key]
+    return []
 
 
 def _missing_kb(kb) -> list[str]:
