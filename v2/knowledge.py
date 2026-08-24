@@ -1,5 +1,8 @@
 """Read AI-Knowledge as Read Only. Never write or invent substitutes.
 
+Phase3-A: Watchlist is GET/read only. This module does not create, update,
+or delete Watchlist / Performance / StrategyBank.
+
 AI_KNOWLEDGE_TOKEN (optional):
 - Purpose: GitHub Contents GET of the four Investment markdown files.
 - Not used for commit, PR, PUT/PATCH/DELETE, SMTP, or trading.
@@ -17,9 +20,11 @@ import urllib.request
 from pathlib import Path
 
 from v2 import DATA_UNAVAILABLE
-from v2.targets import KB_FILES
+from v2.targets import ATTACK_001, DEFENSE_001, KB_FILES
 
 DEFAULT_REPO = "marutaka1966/AI-Knowledge"
+WATCHLIST_FILE = "Projects/Investment/Watchlist.md"
+CONFIRMED_TEST_IDS = (ATTACK_001["test_id"], DEFENSE_001["test_id"])
 
 
 class KnowledgeSnapshot:
@@ -32,6 +37,23 @@ class KnowledgeSnapshot:
 
     def text(self, path: str) -> str:
         return self.files.get(path, "")
+
+    def watchlist_text(self) -> str:
+        """Read Watchlist.md only. Does not write."""
+        return self.text(WATCHLIST_FILE)
+
+    def has_test_id(self, test_id: str) -> bool:
+        """True when the snapshot already contains the confirmed Test ID."""
+        if not self.available or test_id not in CONFIRMED_TEST_IDS:
+            return False
+        return test_id in self.watchlist_text()
+
+    def confirmed_test_ids(self) -> tuple[str, ...]:
+        """Return confirmed IDs found in Watchlist. Does not add missing IDs."""
+        if not self.available:
+            return ()
+        text = self.watchlist_text()
+        return tuple(test_id for test_id in CONFIRMED_TEST_IDS if test_id in text)
 
 
 def load_knowledge() -> KnowledgeSnapshot:
@@ -61,19 +83,22 @@ def _from_path(root: str) -> KnowledgeSnapshot:
 
 
 def _from_github(token: str) -> KnowledgeSnapshot:
-    """GET /repos/.../contents/... only. No write APIs."""
+    """GET /repos/.../contents/... only. No PUT/PATCH/DELETE/commit."""
     repo = os.environ.get("AI_KNOWLEDGE_REPO", DEFAULT_REPO).strip() or DEFAULT_REPO
     files: dict[str, str] = {}
     for rel in KB_FILES:
         url = f"https://api.github.com/repos/{repo}/contents/{rel}"
         req = urllib.request.Request(
             url,
+            method="GET",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
                 "User-Agent": "marume-report-v2",
             },
         )
+        if req.get_method() != "GET":
+            return KnowledgeSnapshot(None, DATA_UNAVAILABLE)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
