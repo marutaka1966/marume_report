@@ -1,0 +1,36 @@
+# V2 Phase 1 dry-run — separate from Daily Marume Report.
+#
+# Existing workflow: .github/workflows/daily.yml (unchanged).
+# This job does not send email and does not write to AI-Knowledge.
+#
+# AI_KNOWLEDGE_TOKEN:
+#   Optional. Read Only. GitHub Contents GET of Investment markdown only.
+#   Never used for commit, PR, SMTP, or trading.
+#   If unset, the engine records DATA_UNAVAILABLE and verdict WAIT.
+#
+# Launch: Actions → "V2 Phase 1 Dry-Run" → Run workflow.
+# Phase 2 may add a schedule. Do not attach GMAIL_* here.
+
+name: V2 Phase 1 Dry-Run
+
+on:
+  workflow_dispatch:
+
+jobs:
+  v2-dry-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run V2 engine (log only, no SMTP)
+        run: python -m v2.engine
+        env:
+          AI_KNOWLEDGE_TOKEN: ${{ secrets.AI_KNOWLEDGE_TOKEN }}
+          AI_KNOWLEDGE_REPO: marutaka1966/AI-Knowledge

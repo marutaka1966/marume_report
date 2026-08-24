@@ -206,3 +206,11 @@ with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
 
 print("メール送信完了")
 print(os.environ["GMAIL_USER"])
+
+# V2 Phase 1 dry-run. Must not block or replace the Daily Report email above.
+try:
+    from v2.engine import run_phase1
+
+    run_phase1()
+except Exception as exc:
+    print(f"V2_PHASE1_ERROR {type(exc).__name__}: {exc}")
