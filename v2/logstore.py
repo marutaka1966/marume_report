@@ -19,6 +19,7 @@ FORBIDDEN_PATH_PARTS = (
     "Performance.md",
     "StrategyBank.md",
     "Portfolio.md",
+    "Holdings.md",
     "DecisionEngine.md",
 )
 
