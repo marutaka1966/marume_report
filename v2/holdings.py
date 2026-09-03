@@ -13,6 +13,7 @@ from v2 import DATA_UNAVAILABLE
 
 DEFAULT_REPO = "marutaka1966/AI-Knowledge"
 HOLDINGS_FILE = "Projects/Investment/Portfolio/Holdings.md"
+JP_SECTION = "### 国内株"
 US_SECTION = "### 米国株"
 HOLDINGS_NUMERIC = "## 1. 保有数値"
 
@@ -34,9 +35,31 @@ def load_holdings_markdown() -> tuple[str | None, str | None]:
     return _from_github(token)
 
 
+def parse_jp_tickers(markdown: str) -> list[str]:
+    """Tickers from the first 国内株 table under 保有数値. US stocks and funds are ignored."""
+    return _parse_codes(_numeric_table(markdown, JP_SECTION))
+
+
 def parse_us_tickers(markdown: str) -> list[str]:
     """Tickers from the first 米国株 table under 保有数値. JP stocks and funds are ignored."""
-    table = _us_numeric_table(markdown)
+    return _parse_codes(_numeric_table(markdown, US_SECTION))
+
+
+def load_jp_tickers() -> tuple[list[str], str | None]:
+    text, error = load_holdings_markdown()
+    if error or not text:
+        return [], error or DATA_UNAVAILABLE
+    return parse_jp_tickers(text), None
+
+
+def load_us_tickers() -> tuple[list[str], str | None]:
+    text, error = load_holdings_markdown()
+    if error or not text:
+        return [], error or DATA_UNAVAILABLE
+    return parse_us_tickers(text), None
+
+
+def _parse_codes(table: str) -> list[str]:
     tickers: list[str] = []
     seen: set[str] = set()
     for line in table.splitlines():
@@ -58,22 +81,15 @@ def parse_us_tickers(markdown: str) -> list[str]:
     return tickers
 
 
-def load_us_tickers() -> tuple[list[str], str | None]:
-    text, error = load_holdings_markdown()
-    if error or not text:
-        return [], error or DATA_UNAVAILABLE
-    return parse_us_tickers(text), None
-
-
-def _us_numeric_table(markdown: str) -> str:
+def _numeric_table(markdown: str, heading: str) -> str:
     numeric = markdown
     start_numeric = markdown.find(HOLDINGS_NUMERIC)
     if start_numeric >= 0:
         numeric = markdown[start_numeric:]
-    start = numeric.find(US_SECTION)
+    start = numeric.find(heading)
     if start < 0:
         return ""
-    rest = numeric[start + len(US_SECTION) :]
+    rest = numeric[start + len(heading) :]
     next_heading = rest.find("\n### ")
     if next_heading >= 0:
         rest = rest[:next_heading]
