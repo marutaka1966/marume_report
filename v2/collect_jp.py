@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from v2 import DATA_UNAVAILABLE
+from v2.collect_report import finish_collection, print_local_log_line
 from v2.holdings import HOLDINGS_FILE, load_jp_tickers
 from v2.jp_closes import REQUIRED_FIELDS, collect_symbol
 from v2.jp_session import now_tokyo, session_phase
@@ -47,7 +47,7 @@ def collect_jp_regular_closes(
     if log_dir:
         path = write_jp_closes(document, log_dir=log_dir)
         document["log_path"] = str(path)
-        print(f"JP_CLOSES_LOG {path}")
+        print_local_log_line("JP_CLOSES_LOG", path)
     return document
 
 
@@ -67,15 +67,7 @@ def write_jp_closes(document: dict[str, Any], *, log_dir: str | Path = "logs") -
 
 def main() -> int:
     document = collect_jp_regular_closes(log_dir="logs")
-    ok = sum(1 for row in document["quotes"] if row.get("price") != DATA_UNAVAILABLE)
-    failed = [row["symbol"] for row in document["quotes"] if row.get("price") == DATA_UNAVAILABLE]
-    print(json.dumps({"ok": ok, "failed": failed}, ensure_ascii=False))
-    for row in document["quotes"]:
-        missing = [name for name in REQUIRED_FIELDS if name not in row]
-        if missing:
-            print(f"MISSING_FIELDS {row.get('symbol')} {missing}")
-            return 1
-    return 0
+    return finish_collection("jp", document, required_fields=REQUIRED_FIELDS)
 
 
 if __name__ == "__main__":

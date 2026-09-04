@@ -1,0 +1,80 @@
+# Manual market-data collection. No schedule. No email. No AI-Knowledge writes.
+#
+# Actions → "Collect Market Data" → Run workflow.
+# Target: jp / us / funds / all (default all).
+# Jobs are independent: one market failing does not cancel the others.
+# Public logs show market, ok/failed counts, and generalized reasons only.
+
+name: Collect Market Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Market to collect
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - jp
+          - us
+          - funds
+
+permissions:
+  contents: read
+
+jobs:
+  collect-jp:
+    if: inputs.target == 'all' || inputs.target == 'jp'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Collect JP regular closes
+        run: python -m v2.collect_jp
+        env:
+          AI_KNOWLEDGE_TOKEN: ${{ secrets.AI_KNOWLEDGE_TOKEN }}
+          AI_KNOWLEDGE_REPO: marutaka1966/AI-Knowledge
+
+  collect-us:
+    if: inputs.target == 'all' || inputs.target == 'us'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Collect US regular closes
+        run: python -m v2.collect_us
+        env:
+          AI_KNOWLEDGE_TOKEN: ${{ secrets.AI_KNOWLEDGE_TOKEN }}
+          AI_KNOWLEDGE_REPO: marutaka1966/AI-Knowledge
+
+  collect-funds:
+    if: inputs.target == 'all' || inputs.target == 'funds'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Collect official fund NAVs
+        run: python -m v2.collect_funds
+        env:
+          AI_KNOWLEDGE_TOKEN: ${{ secrets.AI_KNOWLEDGE_TOKEN }}
+          AI_KNOWLEDGE_REPO: marutaka1966/AI-Knowledge
