@@ -15,6 +15,7 @@ DEFAULT_REPO = "marutaka1966/AI-Knowledge"
 HOLDINGS_FILE = "Projects/Investment/Portfolio/Holdings.md"
 JP_SECTION = "### 国内株"
 US_SECTION = "### 米国株"
+FUND_SECTION = "### 投資信託"
 HOLDINGS_NUMERIC = "## 1. 保有数値"
 
 
@@ -45,6 +46,14 @@ def parse_us_tickers(markdown: str) -> list[str]:
     return _parse_codes(_numeric_table(markdown, US_SECTION))
 
 
+def parse_fund_names(markdown: str) -> list[str]:
+    """Fund names from the first 投資信託 table under 保有数値.
+
+    Codes stay unread. JP and US ticker tables are ignored.
+    """
+    return _parse_names(_numeric_table(markdown, FUND_SECTION))
+
+
 def load_jp_tickers() -> tuple[list[str], str | None]:
     text, error = load_holdings_markdown()
     if error or not text:
@@ -57,6 +66,13 @@ def load_us_tickers() -> tuple[list[str], str | None]:
     if error or not text:
         return [], error or DATA_UNAVAILABLE
     return parse_us_tickers(text), None
+
+
+def load_fund_names() -> tuple[list[str], str | None]:
+    text, error = load_holdings_markdown()
+    if error or not text:
+        return [], error or DATA_UNAVAILABLE
+    return parse_fund_names(text), None
 
 
 def _parse_codes(table: str) -> list[str]:
@@ -79,6 +95,28 @@ def _parse_codes(table: str) -> list[str]:
         seen.add(code)
         tickers.append(code)
     return tickers
+
+
+def _parse_names(table: str) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in table.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        name = cells[1]
+        if not name or name == "銘柄名" or set(name) <= {"-", ":"}:
+            continue
+        if name == "未確認":
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
 
 
 def _numeric_table(markdown: str, heading: str) -> str:
