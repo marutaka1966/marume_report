@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from v2 import DATA_UNAVAILABLE
+from v2.collect_report import finish_collection, print_local_log_line
 from v2.fund_nav import REQUIRED_FIELDS, collect_fund
 from v2.holdings import HOLDINGS_FILE, load_fund_names
 from v2.jp_session import now_tokyo
@@ -54,7 +54,7 @@ def collect_fund_navs(
     if log_dir:
         path = write_fund_navs(document, log_dir=log_dir)
         document["log_path"] = str(path)
-        print(f"FUND_NAV_LOG {path}")
+        print_local_log_line("FUND_NAV_LOG", path)
     return document
 
 
@@ -74,19 +74,7 @@ def write_fund_navs(document: dict[str, Any], *, log_dir: str | Path = "logs") -
 
 def main() -> int:
     document = collect_fund_navs(log_dir="logs")
-    ok = sum(1 for row in document["quotes"] if row.get("status") != DATA_UNAVAILABLE)
-    failed = [
-        {"name": row["name"], "error": row.get("error")}
-        for row in document["quotes"]
-        if row.get("status") == DATA_UNAVAILABLE
-    ]
-    print(json.dumps({"ok": ok, "failed": failed}, ensure_ascii=False))
-    for row in document["quotes"]:
-        missing = [name for name in REQUIRED_FIELDS if name not in row]
-        if missing:
-            print(f"MISSING_FIELDS {row.get('name')} {missing}")
-            return 1
-    return 0
+    return finish_collection("funds", document, required_fields=REQUIRED_FIELDS)
 
 
 if __name__ == "__main__":
