@@ -7,13 +7,18 @@ import json
 import re
 import tempfile
 import unittest
+import urllib.error
 from datetime import datetime
+from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
 
 from v2 import DATA_UNAVAILABLE
 from v2.collect_funds import collect_fund_navs, write_fund_navs
 from v2.collect_jp import collect_jp_regular_closes
+from v2.collect_report import public_summary
 from v2.collect_us import collect_us_regular_closes
+from v2.fund_fetch import BLOCKED_BY_SOURCE
 from v2.fund_nav import (
     ERR_AMBIGUOUS_DATE,
     ERR_HTML,
@@ -144,7 +149,7 @@ DAIWA_HTML_NO_DATE = """
 </div>
 """
 
-SBI_HTML_AMBIGUOUS = """
+SBI_HTML_NAV_AND_HYOKA = """
 <table class="tpdt mb30">
 <tr>
 <th>基準価額</th>
@@ -161,6 +166,40 @@ SBI_HTML_AMBIGUOUS = """
 <tr>
 <td><span class="ptdate">2026年09月03日</span></td>
 <td>&nbsp;</td>
+<td>&nbsp;</td>
+<td><span class="ptdate">評価基準日 2026年07月31日</span></td>
+</tr>
+</table>
+"""
+
+SBI_HTML_TWO_NAV_DATES = """
+<table class="tpdt mb30">
+<tr>
+<th>基準価額</th>
+<th>カテゴリー</th>
+</tr>
+<tr>
+<td><span class="fprice">17,792</span>円</td>
+<td>国内中型バリュー</td>
+</tr>
+<tr>
+<td><span class="ptdate">2026年09月03日</span> <span class="ptdate">2026年09月02日</span></td>
+<td><span class="ptdate">評価基準日 2026年07月31日</span></td>
+</tr>
+</table>
+"""
+
+SBI_HTML_NAV_NO_DATE = """
+<table class="tpdt mb30">
+<tr>
+<th>基準価額</th>
+<th>カテゴリー</th>
+</tr>
+<tr>
+<td><span class="fprice">17,792</span>円</td>
+<td>国内中型バリュー</td>
+</tr>
+<tr>
 <td>&nbsp;</td>
 <td><span class="ptdate">評価基準日 2026年07月31日</span></td>
 </tr>
@@ -233,12 +272,17 @@ class ParseRuleTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(parse_daiwa_html(DAIWA_HTML_NO_DATE)[2], ERR_MISSING_DATE)
 
-    def test_sbi_ambiguous_dates_are_unavailable(self):
-        self.assertEqual(parse_sbi_html(SBI_HTML_AMBIGUOUS)[2], ERR_AMBIGUOUS_DATE)
+    def test_sbi_uses_nav_column_date_not_hyoka(self):
+        nav, price_date, error = parse_sbi_html(SBI_HTML_NAV_AND_HYOKA)
+        self.assertEqual(nav, 17792.0)
+        self.assertEqual(price_date, "2026-09-03")
+        self.assertIsNone(error)
         nav, price_date, error = parse_sbi_html(SBI_HTML_LABELED)
         self.assertEqual(nav, 17792.0)
         self.assertEqual(price_date, "2026-09-03")
         self.assertIsNone(error)
+        self.assertEqual(parse_sbi_html(SBI_HTML_TWO_NAV_DATES)[2], ERR_AMBIGUOUS_DATE)
+        self.assertEqual(parse_sbi_html(SBI_HTML_NAV_NO_DATE)[2], ERR_MISSING_DATE)
 
     def test_html_change_is_unavailable(self):
         self.assertEqual(parse_pictet_html("<html>no table</html>")[2], ERR_HTML)
@@ -270,14 +314,58 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(row["price_date"], DATA_UNAVAILABLE)
         self.assertEqual(row["error"], ERR_MISSING_DATE)
 
-    def test_sbi_ambiguous_record(self):
+    def test_sbi_nav_column_record(self):
         row = collect_fund(
             "SBI日本高配当株式（分配）ファンド（年4回決算型）",
             now=_tokyo(2026, 9, 4),
-            fetch_page=lambda _url: SBI_HTML_AMBIGUOUS,
+            fetch_page=lambda _url: SBI_HTML_NAV_AND_HYOKA,
+        )
+        self.assertEqual(row["status"], "ok")
+        self.assertEqual(row["nav"], 17792.0)
+        self.assertEqual(row["price_date"], "2026-09-03")
+        self.assertIsNone(row["error"])
+        missing = collect_fund(
+            "SBI日本高配当株式（分配）ファンド（年4回決算型）",
+            now=_tokyo(2026, 9, 4),
+            fetch_page=lambda _url: SBI_HTML_NAV_NO_DATE,
+        )
+        self.assertEqual(missing["status"], DATA_UNAVAILABLE)
+        self.assertEqual(missing["error"], ERR_MISSING_DATE)
+        self.assertEqual(missing["nav"], DATA_UNAVAILABLE)
+        self.assertEqual(missing["price_date"], DATA_UNAVAILABLE)
+
+    def test_mufg_uses_official_api_without_html(self):
+        row = collect_fund(
+            "eMAXIS Slim 米国株式（S&P500）",
+            now=_tokyo(2026, 9, 4),
+            fetch_page=lambda _url: None,
+            fetch_details=lambda _url: MUFG_JSON,
+        )
+        self.assertEqual(row["status"], "ok")
+        self.assertEqual(row["nav"], 44779.0)
+        self.assertEqual(row["price_date"], "2026-09-03")
+        self.assertIn("mukamapi/fund_details", row["source"])
+        self.assertIn("253266", row["source"])
+
+    def test_source_block_is_classified(self):
+        def forbidden(_url: str) -> str:
+            raise urllib.error.HTTPError(
+                "https://example.invalid",
+                403,
+                "Forbidden",
+                EmailMessage(),
+                BytesIO(),
+            )
+
+        row = collect_fund(
+            "iTrustインド株式",
+            now=_tokyo(2026, 9, 4),
+            fetch_page=forbidden,
         )
         self.assertEqual(row["status"], DATA_UNAVAILABLE)
-        self.assertEqual(row["error"], ERR_AMBIGUOUS_DATE)
+        self.assertEqual(row["error"], BLOCKED_BY_SOURCE)
+        self.assertNotIn("example.invalid", row["error"])
+        self.assertNotIn("iTrust", row["error"])
 
     def test_unmapped_name_is_unavailable(self):
         row = collect_fund("存在しないファンド", now=_tokyo(2026, 9, 4))
@@ -292,7 +380,7 @@ class CollectorTests(unittest.TestCase):
             if "daiwa" in url:
                 return DAIWA_HTML
             if "wealthadvisor" in url:
-                return SBI_HTML_AMBIGUOUS
+                return SBI_HTML_NAV_AND_HYOKA
             match = re.search(r"/fund/(\d+)\.html", url)
             if match:
                 return f'<input type="hidden" id="js-fund-code" value="{match.group(1)}">'
@@ -316,10 +404,25 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(by_name["eMAXIS NASDAQ100インデックス"]["status"], "ok")
             self.assertEqual(by_name["iFreeNEXT FANG+インデックス"]["status"], "ok")
             self.assertEqual(by_name["iTrustインド株式"]["status"], DATA_UNAVAILABLE)
+            self.assertEqual(by_name["iTrustインド株式"]["error"], "UNKNOWN_FETCH_ERROR")
             self.assertEqual(
                 by_name["SBI日本高配当株式（分配）ファンド（年4回決算型）"]["status"],
-                DATA_UNAVAILABLE,
+                "ok",
             )
+            self.assertEqual(
+                by_name["SBI日本高配当株式（分配）ファンド（年4回決算型）"]["price_date"],
+                "2026-09-03",
+            )
+            payload = public_summary("funds", document)
+            dumped = json.dumps(payload, ensure_ascii=False)
+            self.assertEqual(payload["ok"], 5)
+            self.assertEqual(payload["failed"], 1)
+            self.assertEqual(payload["reasons"], [{"reason": "UNKNOWN_FETCH_ERROR", "count": 1}])
+            for fund_name in EXPECTED_FUNDS:
+                self.assertNotIn(fund_name, dumped)
+            self.assertNotIn("pictet", dumped)
+            self.assertNotIn("wealthadvisor", dumped)
+            self.assertNotIn("23352", dumped)
             self.assertTrue(Path(document["log_path"]).is_file())
             saved = json.loads(Path(document["log_path"]).read_text(encoding="utf-8"))
             self.assertEqual(saved["log_kind"], "fund_official_navs")
