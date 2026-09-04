@@ -2,30 +2,45 @@
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.request
 from datetime import datetime
+from html import unescape
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 from v2 import DATA_UNAVAILABLE
+from v2.fund_fetch import (
+    AMBIGUOUS_DATE,
+    BLOCKED_BY_SOURCE,
+    HTML_PARSE_ERROR,
+    JSON_PARSE_ERROR,
+    MISSING_DATE,
+    MISSING_NAV,
+    UNMAPPED_NAME,
+    UNKNOWN_FETCH_ERROR,
+    _close_http_error,
+    fetch_official_json,
+    fetch_official_text,
+    public_fund_cause,
+    to_public_fetch_cause,
+)
 from v2.fund_sources import MUFG_FUND_DETAILS, OFFICIAL_FUND_PAGES, PARSER_DAIWA, PARSER_MUFG, PARSER_PICTET, PARSER_SBI
 from v2.jp_session import now_tokyo
+from v2.us_closes import CONNECTION_ERROR, DNS_ERROR, TIMEOUT, classify_fetch_error
 
 ASSET_TYPE = "investment_trust"
 STATUS_OK = "ok"
-USER_AGENT = "marume-report-v2"
 
-ERR_UNMAPPED = "公式ページとの名称対応が不明"
-ERR_FETCH = "ページの取得に失敗した"
-ERR_API_FETCH = "公式データの取得に失敗した"
-ERR_MISSING_NAV = "基準価額が取得できない"
-ERR_MISSING_DATE = "基準日が取得できない"
-ERR_AMBIGUOUS_DATE = "基準日が一意に確定できない"
-ERR_HTML = "HTMLの構造が変わった"
-ERR_JSON = "公式データの構造が変わった"
+# Public cause aliases used by tests and records.
+ERR_UNMAPPED = UNMAPPED_NAME
+ERR_FETCH = UNKNOWN_FETCH_ERROR
+ERR_API_FETCH = UNKNOWN_FETCH_ERROR
+ERR_MISSING_NAV = MISSING_NAV
+ERR_MISSING_DATE = MISSING_DATE
+ERR_AMBIGUOUS_DATE = AMBIGUOUS_DATE
+ERR_HTML = HTML_PARSE_ERROR
+ERR_JSON = JSON_PARSE_ERROR
+ERR_BLOCKED = BLOCKED_BY_SOURCE
 
 REQUIRED_FIELDS = (
     "name",
@@ -49,7 +64,16 @@ _FUND_CD_INPUT_ALT = re.compile(
 _MUFG_URL_CD = re.compile(r"/fund/(\d+)\.html(?:$|\?)")
 _ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 _JP_DATE = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日")
+_SLASH_DATE = re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})")
 _YMD8 = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
+_TABLE = re.compile(r"<table\b[^>]*>(.*?)</table>", re.IGNORECASE | re.DOTALL)
+_ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
+_CELL = re.compile(r"<t[hd]\b[^>]*>(.*?)</t[hd]>", re.IGNORECASE | re.DOTALL)
+_FPRICE = re.compile(r'class=["\']fprice["\'][^>]*>\s*([0-9,]+)', re.IGNORECASE)
+_NAV_YEN = re.compile(r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*円")
+_HYOKA_DATE = re.compile(
+    r"評価基準日[:：]?\s*(?:\d{4}年\d{1,2}月\d{1,2}日|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{8})"
+)
 
 
 def official_page(name: str) -> dict[str, str] | None:
@@ -61,28 +85,13 @@ def mufg_details_url(fund_cd: str) -> str:
 
 
 def fetch_text(url: str) -> str | None:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-    except (urllib.error.URLError, TimeoutError, ValueError):
-        return None
-    for encoding in ("utf-8", "cp932", "shift_jis"):
-        try:
-            return raw.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return None
+    text, _error = fetch_official_text(url)
+    return text
 
 
 def fetch_json(url: str) -> dict[str, Any] | None:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError, UnicodeDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
+    payload, _error = fetch_official_json(url)
+    return payload
 
 
 def unavailable_record(
@@ -101,7 +110,7 @@ def unavailable_record(
         "observed_at": observed_at,
         "source": source,
         "status": DATA_UNAVAILABLE,
-        "error": error,
+        "error": public_fund_cause(error),
     }
 
 
@@ -136,7 +145,7 @@ def parse_labeled_date(text: str) -> str | None:
     jp = _JP_DATE.search(text)
     if jp:
         return f"{int(jp.group(1)):04d}-{int(jp.group(2)):02d}-{int(jp.group(3)):02d}"
-    slash = re.search(r"(\d{4})/(\d{1,2})/(\d{1,2})", text)
+    slash = _SLASH_DATE.search(text)
     if slash:
         return f"{int(slash.group(1)):04d}-{int(slash.group(2)):02d}-{int(slash.group(3)):02d}"
     compact = _YMD8.fullmatch(re.sub(r"[.\s]", "", text))
@@ -239,8 +248,74 @@ def parse_daiwa_html(html: str) -> tuple[float | None, str | None, str | None]:
     return nav, price_date, None
 
 
+def _strip_cell(raw: str) -> str:
+    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", raw, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<br\s*/?>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+def _all_dates(text: str) -> set[str]:
+    dates: set[str] = set()
+    for match in _JP_DATE.finditer(text):
+        dates.add(f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}")
+    for match in _ISO_DATE.finditer(text):
+        dates.add(f"{match.group(1)}-{match.group(2)}-{match.group(3)}")
+    for match in _SLASH_DATE.finditer(text):
+        dates.add(f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}")
+    return dates
+
+
+def _nav_dates(text: str) -> set[str]:
+    """Dates tied to 基準価額. Drop 評価基準日 values. Do not guess."""
+    return _all_dates(_HYOKA_DATE.sub(" ", text))
+
+
+def _parse_nav_amount(raw_html: str, text: str) -> float | None:
+    match = _FPRICE.search(raw_html) or _NAV_YEN.search(text)
+    if not match:
+        return None
+    try:
+        return float(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
 def parse_sbi_html(html: str) -> tuple[float | None, str | None, str | None]:
-    """SBI AM WealthAdvisor table. Unlabeled NAV dates plus 評価基準日 are not unique."""
+    """Use the 基準価額 column only. Never adopt 評価基準日."""
+    for table in _TABLE.findall(html):
+        rows = [_CELL.findall(row) for row in _ROW.findall(table)]
+        rows = [row for row in rows if row]
+        nav_col: int | None = None
+        header_at: int | None = None
+        for index, row in enumerate(rows):
+            for col, cell in enumerate(row):
+                if _strip_cell(cell) == "基準価額":
+                    nav_col = col
+                    header_at = index
+                    break
+            if nav_col is not None:
+                break
+        if nav_col is None or header_at is None:
+            continue
+        column_html = []
+        for row in rows[header_at + 1 :]:
+            if nav_col < len(row):
+                column_html.append(row[nav_col])
+        if not column_html:
+            continue
+        blob_html = " ".join(column_html)
+        blob_text = _strip_cell(blob_html)
+        dates = _nav_dates(blob_text)
+        nav = _parse_nav_amount(blob_html, blob_text)
+        if nav is None:
+            return None, None, ERR_MISSING_NAV
+        if len(dates) > 1:
+            return None, None, ERR_AMBIGUOUS_DATE
+        if len(dates) == 0:
+            return None, None, ERR_MISSING_DATE
+        return nav, next(iter(dates)), None
+
     start = html.find(">基準価額<")
     if start < 0:
         start = html.find("<th>基準価額</th>")
@@ -250,27 +325,64 @@ def parse_sbi_html(html: str) -> tuple[float | None, str | None, str | None]:
     labeled = re.findall(r"(?<!評価)基準日[:：]\s*([^<]+)", block)
     unique_dates = {parse_labeled_date(item) for item in labeled}
     unique_dates.discard(None)
-    has_hyoka = "評価基準日" in block
-    unlabeled_dates = {parse_labeled_date(item.group(0)) for item in _JP_DATE.finditer(block)}
-    unlabeled_dates.discard(None)
-    if has_hyoka and not unique_dates:
-        return None, None, ERR_AMBIGUOUS_DATE
+    if "評価基準日" in block and not unique_dates:
+        return None, None, ERR_MISSING_DATE
     if len(unique_dates) > 1:
-        return None, None, ERR_AMBIGUOUS_DATE
-    if has_hyoka and unique_dates and unlabeled_dates - unique_dates:
         return None, None, ERR_AMBIGUOUS_DATE
     if not unique_dates:
         return None, None, ERR_MISSING_DATE
-    nav_match = re.search(r'class="fprice"[^>]*>\s*([0-9,]+)\s*</span>\s*円', block)
-    if not nav_match:
-        nav_match = re.search(r"([0-9,]+)\s*円", block)
-    if not nav_match:
+    nav = _parse_nav_amount(block, _strip_cell(block))
+    if nav is None:
         return None, None, ERR_MISSING_NAV
-    try:
-        nav = float(nav_match.group(1).replace(",", ""))
-    except ValueError:
-        return None, None, ERR_HTML
     return nav, next(iter(unique_dates)), None
+
+
+def _page_text(
+    url: str,
+    fetch_page: Callable[[str], str | None] | None,
+) -> tuple[str | None, str | None]:
+    if fetch_page is None:
+        return fetch_official_text(url)
+    try:
+        html = fetch_page(url)
+    except Exception as exc:
+        _close_http_error(exc)
+        return None, to_public_fetch_cause(classify_fetch_error(exc))
+    if not html:
+        return None, UNKNOWN_FETCH_ERROR
+    return html, None
+
+
+def _details_json(
+    url: str,
+    fetch_details: Callable[[str], dict[str, Any] | None] | None,
+    *,
+    referer: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if fetch_details is None:
+        return fetch_official_json(url, referer=referer)
+    try:
+        payload = fetch_details(url)
+    except Exception as exc:
+        _close_http_error(exc)
+        return None, to_public_fetch_cause(classify_fetch_error(exc))
+    if not payload:
+        return None, UNKNOWN_FETCH_ERROR
+    if not isinstance(payload, dict):
+        return None, JSON_PARSE_ERROR
+    return payload, None
+
+
+def _prefer_fetch_error(*codes: str | None) -> str:
+    present = [public_fund_cause(code) for code in codes if code]
+    if not present:
+        return UNKNOWN_FETCH_ERROR
+    if BLOCKED_BY_SOURCE in present:
+        return BLOCKED_BY_SOURCE
+    for cause in (TIMEOUT, DNS_ERROR, CONNECTION_ERROR):
+        if cause in present:
+            return cause
+    return present[0]
 
 
 def collect_fund(
@@ -291,21 +403,21 @@ def collect_fund(
         )
     source = page["url"]
     parser = page["parser"]
-    getter = fetch_page or fetch_text
-    details_getter = fetch_details or fetch_json
-    try:
-        html = getter(source)
-    except Exception:
-        return unavailable_record(name, observed_at=observed_at, source=source, error=ERR_FETCH)
-    if not html:
-        return unavailable_record(name, observed_at=observed_at, source=source, error=ERR_FETCH)
     if parser == PARSER_MUFG:
         return _collect_mufg(
             name,
-            html=html,
             page_url=source,
             observed_at=observed_at,
-            fetch_details=details_getter,
+            fetch_page=fetch_page,
+            fetch_details=fetch_details,
+        )
+    html, fetch_error = _page_text(source, fetch_page)
+    if not html:
+        return unavailable_record(
+            name,
+            observed_at=observed_at,
+            source=source,
+            error=fetch_error or ERR_FETCH,
         )
     parsers = {
         PARSER_PICTET: parse_pictet_html,
@@ -336,22 +448,72 @@ def collect_fund(
 def _collect_mufg(
     name: str,
     *,
-    html: str,
     page_url: str,
     observed_at: str,
-    fetch_details: Callable[[str], dict[str, Any] | None],
+    fetch_page: Callable[[str], str | None] | None,
+    fetch_details: Callable[[str], dict[str, Any] | None] | None,
 ) -> dict[str, Any]:
-    page_cd = _mufg_fund_cd_from_html(html)
     url_cd = _mufg_fund_cd_from_url(page_url)
-    if not page_cd or not url_cd or page_cd != url_cd:
-        return unavailable_record(name, observed_at=observed_at, source=page_url, error=ERR_HTML)
-    api_url = mufg_details_url(page_cd)
-    try:
-        payload = fetch_details(api_url)
-    except Exception:
-        return unavailable_record(name, observed_at=observed_at, source=api_url, error=ERR_API_FETCH)
+    api_error: str | None = None
+    if url_cd:
+        api_url = mufg_details_url(url_cd)
+        record = _mufg_from_api(
+            name,
+            api_url=api_url,
+            observed_at=observed_at,
+            fetch_details=fetch_details,
+            referer=page_url,
+        )
+        if record["status"] == STATUS_OK:
+            return record
+        api_error = record.get("error") if isinstance(record.get("error"), str) else ERR_API_FETCH
+
+    html, html_error = _page_text(page_url, fetch_page)
+    if html:
+        page_cd = _mufg_fund_cd_from_html(html)
+        if url_cd and page_cd and url_cd != page_cd:
+            return unavailable_record(name, observed_at=observed_at, source=page_url, error=ERR_HTML)
+        fund_cd = page_cd or url_cd
+        if fund_cd:
+            api_url = mufg_details_url(fund_cd)
+            record = _mufg_from_api(
+                name,
+                api_url=api_url,
+                observed_at=observed_at,
+                fetch_details=fetch_details,
+                referer=page_url,
+            )
+            if record["status"] == STATUS_OK:
+                return record
+            api_error = record.get("error") if isinstance(record.get("error"), str) else api_error
+        elif not url_cd:
+            return unavailable_record(name, observed_at=observed_at, source=page_url, error=ERR_HTML)
+
+    source = mufg_details_url(url_cd) if url_cd else page_url
+    return unavailable_record(
+        name,
+        observed_at=observed_at,
+        source=source,
+        error=_prefer_fetch_error(html_error if not html else None, api_error, html_error),
+    )
+
+
+def _mufg_from_api(
+    name: str,
+    *,
+    api_url: str,
+    observed_at: str,
+    fetch_details: Callable[[str], dict[str, Any] | None] | None,
+    referer: str,
+) -> dict[str, Any]:
+    payload, fetch_error = _details_json(api_url, fetch_details, referer=referer)
     if not payload:
-        return unavailable_record(name, observed_at=observed_at, source=api_url, error=ERR_API_FETCH)
+        return unavailable_record(
+            name,
+            observed_at=observed_at,
+            source=api_url,
+            error=fetch_error or ERR_API_FETCH,
+        )
     nav, price_date, error = parse_mufg_details(payload)
     if error or nav is None or price_date is None:
         return unavailable_record(
