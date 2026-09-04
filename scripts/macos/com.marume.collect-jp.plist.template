@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.marume.collect-jp</string>
+	<key>WorkingDirectory</key>
+	<string>__REPO_ROOT__</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__RUN_SCRIPT__</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>TZ</key>
+		<string>Asia/Tokyo</string>
+		<key>AI_KNOWLEDGE_PATH</key>
+		<string>__AI_KNOWLEDGE_PATH__</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+	</dict>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>16</integer>
+		<key>Minute</key>
+		<integer>10</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>__REPO_ROOT__/logs/launchd-jp.out</string>
+	<key>StandardErrorPath</key>
+	<string>__REPO_ROOT__/logs/launchd-jp.err</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

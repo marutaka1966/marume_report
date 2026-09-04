@@ -236,6 +236,63 @@ class CollectorTests(unittest.TestCase):
                 self.assertIn(field, row)
                 self.assertIsNotNone(row[field])
 
+    def test_skips_duplicate_save_for_complete_session(self):
+        called: list[str] = []
+
+        def fetch(symbol: str) -> dict:
+            called.append(symbol)
+            return _bars(("2026-09-03", 5.0))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first = collect_jp_regular_closes(
+                now=_tokyo(2026, 9, 3, 16, 10),
+                log_dir=tmp,
+                tickers=["148A", "9432"],
+                fetch_bars=fetch,
+            )
+            self.assertFalse(first.get("reused_log"))
+            self.assertEqual(called, ["148A", "9432"])
+            files = list(Path(tmp).rglob("jp-closes-*.json"))
+            self.assertEqual(len(files), 1)
+            called.clear()
+            second = collect_jp_regular_closes(
+                now=_tokyo(2026, 9, 3, 16, 10),
+                log_dir=tmp,
+                tickers=["148A", "9432"],
+                fetch_bars=fetch,
+            )
+            self.assertEqual(called, [])
+            self.assertTrue(second.get("reused_log"))
+            self.assertEqual(len(list(Path(tmp).rglob("jp-closes-*.json"))), 1)
+
+    def test_rewrites_when_previous_session_log_is_incomplete(self):
+        def fetch(symbol: str):
+            if symbol == "BAD":
+                raise RuntimeError("network")
+            return _bars(("2026-09-03", 5.0))
+
+        called: list[str] = []
+
+        def fetch_ok(symbol: str) -> dict:
+            called.append(symbol)
+            return _bars(("2026-09-03", 5.0))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            collect_jp_regular_closes(
+                now=_tokyo(2026, 9, 3, 16, 10),
+                log_dir=tmp,
+                tickers=["148A", "BAD"],
+                fetch_bars=fetch,
+            )
+            second = collect_jp_regular_closes(
+                now=_tokyo(2026, 9, 3, 16, 10),
+                log_dir=tmp,
+                tickers=["148A"],
+                fetch_bars=fetch_ok,
+            )
+            self.assertFalse(second.get("reused_log"))
+            self.assertEqual(called, ["148A"])
+
     def test_rejects_ai_knowledge_log_path(self):
         with self.assertRaises(ValueError):
             write_jp_closes(
