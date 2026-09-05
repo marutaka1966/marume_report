@@ -23,20 +23,20 @@ HOLDINGS_SAMPLE = """
 
 | 銘柄コード | 銘柄名 | 保有数量 |
 |------------|--------|----------|
-| 148A | ハッチ・ワーク | 200株 |
-| 9432 | NTT | 43,000株 |
+| 1111 | テスト工業A | 10株 |
+| 2222 | テスト工業B | 20株 |
 
 ### 米国株
 
 | 銘柄コード | 銘柄名 | 保有数量 |
 |------------|--------|----------|
-| IREN | IREN | 16株 |
+| TSTA | Test Asset A | 3株 |
 
 ### 投資信託
 
 | 銘柄コード | 銘柄名 |
 |------------|--------|
-| 未確認 | eMAXIS Slim 米国株式（S&P500） |
+| 未確認 | テスト投信A |
 
 ## 2. 投資管理
 
@@ -44,7 +44,7 @@ HOLDINGS_SAMPLE = """
 
 | 銘柄コード | 銘柄名 |
 |------------|--------|
-| 148A | ハッチ・ワーク |
+| 1111 | テスト工業A |
 """
 
 REAL_HOLDINGS = Path(
@@ -69,19 +69,18 @@ def _bars(*pairs: tuple[str, float]) -> dict:
 class HoldingsParseTests(unittest.TestCase):
     def test_extracts_jp_and_ignores_us_and_funds(self):
         tickers = parse_jp_tickers(HOLDINGS_SAMPLE)
-        self.assertEqual(tickers, ["148A", "9432"])
-        self.assertNotIn("IREN", tickers)
+        self.assertEqual(tickers, ["1111", "2222"])
+        self.assertNotIn("TSTA", tickers)
         self.assertNotIn("未確認", tickers)
-        self.assertEqual(parse_us_tickers(HOLDINGS_SAMPLE), ["IREN"])
+        self.assertEqual(parse_us_tickers(HOLDINGS_SAMPLE), ["TSTA"])
 
-    def test_real_holdings_jp_codes(self):
+    def test_real_holdings_parse_without_identifier_assumptions(self):
         if not REAL_HOLDINGS.is_file():
             self.skipTest("Holdings.md is not available locally")
         tickers = parse_jp_tickers(REAL_HOLDINGS.read_text(encoding="utf-8"))
-        self.assertIn("148A", tickers)
-        self.assertIn("9432", tickers)
-        self.assertNotIn("IREN", tickers)
-        self.assertEqual(len(tickers), 16)
+        self.assertTrue(tickers)
+        self.assertTrue(all(isinstance(ticker, str) and ticker for ticker in tickers))
+        self.assertNotIn("未確認", tickers)
 
 
 class SessionDateTests(unittest.TestCase):
@@ -123,13 +122,13 @@ class SessionDateTests(unittest.TestCase):
 
 class CloseSelectionTests(unittest.TestCase):
     def test_yahoo_symbol_appends_tse_suffix(self):
-        self.assertEqual(yahoo_symbol("148A"), "148A.T")
-        self.assertEqual(yahoo_symbol("9432.T"), "9432.T")
+        self.assertEqual(yahoo_symbol("1111"), "1111.T")
+        self.assertEqual(yahoo_symbol("2222.T"), "2222.T")
 
     def test_ignores_intraday_and_unfinished_today_bar(self):
         payload = _bars(("2026-09-02", 100.0), ("2026-09-03", 999.0))
-        pre = collect_symbol("148A", now=_tokyo(2026, 9, 3, 8, 0), fetch_bars=lambda _s: payload)
-        rth = collect_symbol("148A", now=_tokyo(2026, 9, 3, 10, 0), fetch_bars=lambda _s: payload)
+        pre = collect_symbol("1111", now=_tokyo(2026, 9, 3, 8, 0), fetch_bars=lambda _s: payload)
+        rth = collect_symbol("1111", now=_tokyo(2026, 9, 3, 10, 0), fetch_bars=lambda _s: payload)
         self.assertEqual(pre["price"], 100.0)
         self.assertEqual(pre["price_date"], "2026-09-02")
         self.assertEqual(rth["price"], 100.0)
@@ -145,19 +144,19 @@ class CloseSelectionTests(unittest.TestCase):
             data["postMarketPrice"] = 112.0
             return data
 
-        row = collect_symbol("9432", now=_tokyo(2026, 9, 3, 16, 0), fetch_bars=fetch)
+        row = collect_symbol("2222", now=_tokyo(2026, 9, 3, 16, 0), fetch_bars=fetch)
         self.assertEqual(row["price"], 110.0)
         self.assertEqual(row["price_date"], "2026-09-03")
         self.assertEqual(row["session_status"], "regular_close_complete")
 
     def test_weekend_and_holiday_pick_last_completed_session(self):
         weekend = collect_symbol(
-            "9432",
+            "2222",
             now=_tokyo(2026, 9, 5, 12, 0),
             fetch_bars=lambda _s: _bars(("2026-09-03", 10.0), ("2026-09-04", 11.0)),
         )
         holiday = collect_symbol(
-            "9432",
+            "2222",
             now=_tokyo(2026, 9, 21, 12, 0),
             fetch_bars=lambda _s: _bars(("2026-09-18", 20.0), ("2026-09-21", 99.0)),
         )
@@ -168,7 +167,7 @@ class CloseSelectionTests(unittest.TestCase):
 
     def test_missing_session_bar_is_unavailable_not_backfilled(self):
         row = collect_symbol(
-            "9432",
+            "2222",
             now=_tokyo(2026, 9, 3, 16, 0),
             fetch_bars=lambda _s: _bars(("2026-09-02", 10.0)),
         )
@@ -191,11 +190,11 @@ class CollectorTests(unittest.TestCase):
             collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 3, 16, 0),
                 log_dir=tmp,
-                tickers=["148A", "9432"],
+                tickers=["1111", "2222"],
                 fetch_bars=fetch,
             )
-        self.assertEqual(called, ["148A", "9432"])
-        self.assertNotIn("IREN", called)
+        self.assertEqual(called, ["1111", "2222"])
+        self.assertNotIn("TSTA", called)
         self.assertNotIn("GOLD", called)
         self.assertNotEqual(set(called), set(SYMBOLS))
 
@@ -209,12 +208,12 @@ class CollectorTests(unittest.TestCase):
             document = collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 3, 16, 0),
                 log_dir=tmp,
-                tickers=["148A", "BAD", "9432"],
+                tickers=["1111", "BAD", "2222"],
                 fetch_bars=fetch,
             )
         by_symbol = {row["symbol"]: row for row in document["quotes"]}
-        self.assertEqual(by_symbol["148A"]["price"], 5.0)
-        self.assertEqual(by_symbol["9432"]["price"], 5.0)
+        self.assertEqual(by_symbol["1111"]["price"], 5.0)
+        self.assertEqual(by_symbol["2222"]["price"], 5.0)
         self.assertEqual(by_symbol["BAD"]["price"], DATA_UNAVAILABLE)
         self.assertEqual(len(document["quotes"]), 3)
 
@@ -228,7 +227,7 @@ class CollectorTests(unittest.TestCase):
             document = collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 3, 16, 0),
                 log_dir=tmp,
-                tickers=["148A", "BAD"],
+                tickers=["1111", "BAD"],
                 fetch_bars=fetch,
             )
         for row in document["quotes"]:
@@ -247,18 +246,18 @@ class CollectorTests(unittest.TestCase):
             first = collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 3, 16, 10),
                 log_dir=tmp,
-                tickers=["148A", "9432"],
+                tickers=["1111", "2222"],
                 fetch_bars=fetch,
             )
             self.assertFalse(first.get("reused_log"))
-            self.assertEqual(called, ["148A", "9432"])
+            self.assertEqual(called, ["1111", "2222"])
             files = list(Path(tmp).rglob("jp-closes-*.json"))
             self.assertEqual(len(files), 1)
             called.clear()
             second = collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 3, 16, 10),
                 log_dir=tmp,
-                tickers=["148A", "9432"],
+                tickers=["1111", "2222"],
                 fetch_bars=fetch,
             )
             self.assertEqual(called, [])
@@ -281,17 +280,17 @@ class CollectorTests(unittest.TestCase):
             collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 3, 16, 10),
                 log_dir=tmp,
-                tickers=["148A", "BAD"],
+                tickers=["1111", "BAD"],
                 fetch_bars=fetch,
             )
             second = collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 3, 16, 10),
                 log_dir=tmp,
-                tickers=["148A"],
+                tickers=["1111"],
                 fetch_bars=fetch_ok,
             )
             self.assertFalse(second.get("reused_log"))
-            self.assertEqual(called, ["148A"])
+            self.assertEqual(called, ["1111"])
 
     def test_rejects_ai_knowledge_log_path(self):
         with self.assertRaises(ValueError):
@@ -315,11 +314,11 @@ class CollectorTests(unittest.TestCase):
             collect_us_regular_closes(
                 now=datetime(2026, 9, 3, 17, 0, tzinfo=TOKYO),
                 log_dir=tmp,
-                tickers=["IREN"],
+                tickers=["TSTA"],
                 fetch_bars=fetch,
             )
-        self.assertEqual(called, ["IREN"])
-        self.assertNotIn("148A", called)
+        self.assertEqual(called, ["TSTA"])
+        self.assertNotIn("1111", called)
 
 
 if __name__ == "__main__":

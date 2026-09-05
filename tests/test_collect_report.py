@@ -16,6 +16,7 @@ from v2.collect_report import (
     collection_exit_code,
     finish_collection,
     public_summary,
+    write_github_summary,
 )
 from v2.collect_us import main as us_main
 
@@ -28,8 +29,8 @@ class PublicSummaryTests(unittest.TestCase):
         document = {
             "holdings_error": None,
             "quotes": [
-                {"symbol": "148A", "price": 100.0, "error": None},
-                {"symbol": "9432", "price": DATA_UNAVAILABLE, "error": DATA_UNAVAILABLE},
+                {"symbol": "1111", "price": 100.0, "error": None},
+                {"symbol": "2222", "price": DATA_UNAVAILABLE, "error": DATA_UNAVAILABLE},
             ],
         }
         payload = public_summary("jp", document)
@@ -38,8 +39,8 @@ class PublicSummaryTests(unittest.TestCase):
         self.assertEqual(payload["failed"], 1)
         self.assertEqual(payload["reasons"], [{"reason": DATA_UNAVAILABLE, "count": 1}])
         self.assertEqual(collection_exit_code(document), 0)
-        self.assertNotIn("148A", dumped)
-        self.assertNotIn("9432", dumped)
+        self.assertNotIn("1111", dumped)
+        self.assertNotIn("2222", dumped)
         self.assertNotIn("100.0", dumped)
 
     def test_holdings_unreadable_and_all_failed_exit_nonzero(self):
@@ -84,6 +85,25 @@ class PublicSummaryTests(unittest.TestCase):
         self.assertIn("failed: 1", text)
         self.assertIn("HTMLの構造が変わった (1)", text)
         self.assertNotIn("hidden", text)
+
+    def test_decision_summary_uses_decision_count_fields(self):
+        payload = {
+            "market": "decision_input",
+            "price_fetch_succeeded": 3,
+            "price_fetch_failed": 1,
+            "decision_usable": 2,
+            "decision_unusable": 2,
+            "decision_status": "NEEDS_REVIEW",
+            "reasons": [{"reason": "FRESHNESS_UNKNOWN", "count": 1}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": str(summary)}):
+                write_github_summary(payload)
+            text = summary.read_text(encoding="utf-8")
+        self.assertIn("price_fetch_succeeded: 3", text)
+        self.assertIn("decision_usable: 2", text)
+        self.assertIn("FRESHNESS_UNKNOWN (1)", text)
 
 
 class WorkflowFileTests(unittest.TestCase):

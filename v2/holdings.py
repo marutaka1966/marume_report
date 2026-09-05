@@ -75,6 +75,98 @@ def load_fund_names() -> tuple[list[str], str | None]:
     return parse_fund_names(text), None
 
 
+def parse_jp_holding_rows(markdown: str) -> list[dict[str, str]]:
+    """Numeric 国内株 rows. Quantity and cost only when the source cell is filled."""
+    return _parse_equity_rows(_numeric_table(markdown, JP_SECTION), cost_amount_index=None)
+
+
+def parse_us_holding_rows(markdown: str) -> list[dict[str, str]]:
+    """Numeric 米国株 rows. Quantity and cost only when the source cell is filled."""
+    return _parse_equity_rows(_numeric_table(markdown, US_SECTION), cost_amount_index=4)
+
+
+def parse_fund_holding_rows(markdown: str) -> list[dict[str, str]]:
+    """Numeric 投資信託 rows keyed by name. Codes stay unread when 未確認."""
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for cells in _table_rows(_numeric_table(markdown, FUND_SECTION)):
+        if len(cells) < 2:
+            continue
+        name = cells[1]
+        if not name or name in {"銘柄名", "未確認"} or set(name) <= {"-", ":"}:
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        rows.append(
+            {
+                "symbol": DATA_UNAVAILABLE,
+                "name": name,
+                "quantity": _source_cell(cells, 2),
+                "avg_cost": _source_cell(cells, 3),
+                "cost_amount": DATA_UNAVAILABLE,
+            }
+        )
+    return rows
+
+
+def load_holding_rows() -> tuple[dict[str, list[dict[str, str]]], str | None]:
+    text, error = load_holdings_markdown()
+    if error or not text:
+        return {"jp": [], "us": [], "funds": []}, error or DATA_UNAVAILABLE
+    return {
+        "jp": parse_jp_holding_rows(text),
+        "us": parse_us_holding_rows(text),
+        "funds": parse_fund_holding_rows(text),
+    }, None
+
+
+def _source_cell(cells: list[str], index: int) -> str:
+    if index >= len(cells):
+        return DATA_UNAVAILABLE
+    value = cells[index].strip()
+    if not value or value == "未確認":
+        return DATA_UNAVAILABLE
+    return value
+
+
+def _table_rows(table: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in table.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if not cells:
+            continue
+        if cells[0] == "銘柄コード" or set(cells[0]) <= {"-", ":"}:
+            continue
+        rows.append(cells)
+    return rows
+
+
+def _parse_equity_rows(table: str, *, cost_amount_index: int | None) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for cells in _table_rows(table):
+        code = cells[0]
+        if not code or code == "未確認":
+            continue
+        if code in seen:
+            continue
+        seen.add(code)
+        rows.append(
+            {
+                "symbol": code,
+                "name": DATA_UNAVAILABLE,
+                "quantity": _source_cell(cells, 2),
+                "avg_cost": _source_cell(cells, 3),
+                "cost_amount": _source_cell(cells, cost_amount_index) if cost_amount_index is not None else DATA_UNAVAILABLE,
+            }
+        )
+    return rows
+
+
 def _parse_codes(table: str) -> list[str]:
     tickers: list[str] = []
     seen: set[str] = set()

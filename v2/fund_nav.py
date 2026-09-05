@@ -30,6 +30,8 @@ from v2.us_closes import CONNECTION_ERROR, DNS_ERROR, TIMEOUT, classify_fetch_er
 
 ASSET_TYPE = "investment_trust"
 STATUS_OK = "ok"
+FRESHNESS_LATEST_OFFICIAL = "latest_official_published"
+FRESHNESS_BASIS_OFFICIAL_CURRENT = "official_current_value"
 
 # Public cause aliases used by tests and records.
 ERR_UNMAPPED = UNMAPPED_NAME
@@ -49,6 +51,8 @@ REQUIRED_FIELDS = (
     "price_date",
     "observed_at",
     "source",
+    "freshness_status",
+    "freshness_basis",
     "status",
     "error",
 )
@@ -109,6 +113,8 @@ def unavailable_record(
         "price_date": DATA_UNAVAILABLE,
         "observed_at": observed_at,
         "source": source,
+        "freshness_status": DATA_UNAVAILABLE,
+        "freshness_basis": DATA_UNAVAILABLE,
         "status": DATA_UNAVAILABLE,
         "error": public_fund_cause(error),
     }
@@ -131,6 +137,8 @@ def ok_record(
         "price_date": price_date,
         "observed_at": observed_at,
         "source": source,
+        "freshness_status": FRESHNESS_LATEST_OFFICIAL,
+        "freshness_basis": FRESHNESS_BASIS_OFFICIAL_CURRENT,
         "status": STATUS_OK,
         "error": None,
     }

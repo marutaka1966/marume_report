@@ -44,24 +44,20 @@ HOLDINGS_SAMPLE = """
 
 | 銘柄コード | 銘柄名 | 保有数量 |
 |------------|--------|----------|
-| 148A | ハッチ・ワーク | 200株 |
+| 1111 | テスト工業A | 10株 |
 
 ### 米国株
 
 | 銘柄コード | 銘柄名 | 保有数量 |
 |------------|--------|----------|
-| IREN | IREN | 16株 |
+| TSTA | Test Asset A | 3株 |
 
 ### 投資信託
 
 | 銘柄コード | 銘柄名 | 保有数量 | 平均取得価格 | 現在株価 | 評価額 | 含み損益 |
 |------------|--------|----------|--------------|----------|--------|----------|
-| 未確認 | eMAXIS Slim 米国株式（S&P500） | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
-| 未確認 | iTrustインド株式 | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
-| 未確認 | SBI日本高配当株式（分配）ファンド（年4回決算型） | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
-| 未確認 | eMAXIS Slim 全世界株式（オール・カントリー） | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
-| 未確認 | eMAXIS NASDAQ100インデックス | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
-| 未確認 | iFreeNEXT FANG+インデックス | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
+| 未確認 | テスト投信A | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
+| 未確認 | テスト投信B | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
 
 ## 2. 投資管理
 
@@ -69,7 +65,7 @@ HOLDINGS_SAMPLE = """
 
 | 銘柄コード | 銘柄名 | 市場 |
 |------------|--------|------|
-| 未確認 | 管理表だけの別ファンド | 投資信託 |
+| 未確認 | 管理表だけのテスト投信 | 投資信託 |
 """
 
 REAL_HOLDINGS = Path(
@@ -226,23 +222,23 @@ def _tokyo(year: int, month: int, day: int, hour: int = 12) -> datetime:
 
 
 class HoldingsParseTests(unittest.TestCase):
-    def test_extracts_six_fund_names_and_ignores_equities(self):
+    def test_extracts_fund_names_and_ignores_equities(self):
         names = parse_fund_names(HOLDINGS_SAMPLE)
-        self.assertEqual(names, EXPECTED_FUNDS)
-        self.assertNotIn("ハッチ・ワーク", names)
-        self.assertNotIn("IREN", names)
+        self.assertEqual(names, ["テスト投信A", "テスト投信B"])
+        self.assertNotIn("テスト工業A", names)
+        self.assertNotIn("TSTA", names)
         self.assertNotIn("未確認", names)
-        self.assertNotIn("管理表だけの別ファンド", names)
-        self.assertEqual(parse_jp_tickers(HOLDINGS_SAMPLE), ["148A"])
-        self.assertEqual(parse_us_tickers(HOLDINGS_SAMPLE), ["IREN"])
+        self.assertNotIn("管理表だけのテスト投信", names)
+        self.assertEqual(parse_jp_tickers(HOLDINGS_SAMPLE), ["1111"])
+        self.assertEqual(parse_us_tickers(HOLDINGS_SAMPLE), ["TSTA"])
 
-    def test_real_holdings_has_six_funds(self):
+    def test_real_holdings_parse_without_identifier_assumptions(self):
         if not REAL_HOLDINGS.is_file():
             self.skipTest("Holdings.md is not available locally")
         names = parse_fund_names(REAL_HOLDINGS.read_text(encoding="utf-8"))
-        self.assertEqual(names, EXPECTED_FUNDS)
-        self.assertEqual(len(names), 6)
-        self.assertEqual(set(names), set(OFFICIAL_FUND_PAGES))
+        self.assertTrue(names)
+        self.assertTrue(all(isinstance(name, str) and name for name in names))
+        self.assertNotIn("未確認", names)
 
 
 class ParseRuleTests(unittest.TestCase):
@@ -300,6 +296,8 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(row["nav"], 23352.0)
         self.assertEqual(row["price_date"], "2026-09-03")
         self.assertEqual(row["currency"], "JPY")
+        self.assertEqual(row["freshness_status"], "latest_official_published")
+        self.assertEqual(row["freshness_basis"], "official_current_value")
         self.assertIsNone(row["error"])
         self.assertEqual(row["source"], OFFICIAL_FUND_PAGES["iTrustインド株式"]["url"])
 
@@ -312,6 +310,8 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(row["status"], DATA_UNAVAILABLE)
         self.assertEqual(row["nav"], DATA_UNAVAILABLE)
         self.assertEqual(row["price_date"], DATA_UNAVAILABLE)
+        self.assertEqual(row["freshness_status"], DATA_UNAVAILABLE)
+        self.assertEqual(row["freshness_basis"], DATA_UNAVAILABLE)
         self.assertEqual(row["error"], ERR_MISSING_DATE)
 
     def test_sbi_nav_column_record(self):
@@ -469,17 +469,17 @@ class CollectorTests(unittest.TestCase):
             collect_jp_regular_closes(
                 now=_tokyo(2026, 9, 4, 16),
                 log_dir=tmp,
-                tickers=["148A"],
+                tickers=["1111"],
                 fetch_bars=jp_fetch,
             )
             collect_us_regular_closes(
                 now=_tokyo(2026, 9, 4, 16),
                 log_dir=tmp,
-                tickers=["IREN"],
+                tickers=["TSTA"],
                 fetch_bars=us_fetch,
             )
-        self.assertEqual(jp_called, ["148A"])
-        self.assertEqual(us_called, ["IREN"])
+        self.assertEqual(jp_called, ["1111"])
+        self.assertEqual(us_called, ["TSTA"])
         self.assertNotIn("eMAXIS Slim 米国株式（S&P500）", jp_called)
         self.assertNotIn("eMAXIS Slim 米国株式（S&P500）", us_called)
 
