@@ -72,11 +72,24 @@ def write_github_summary(payload: dict[str, Any]) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
     if not path:
         return
-    lines = [
-        f"## {payload['market']}",
-        f"- ok: {payload['ok']}",
-        f"- failed: {payload['failed']}",
-    ]
+    lines = [f"## {payload['market']}"]
+    if "ok" in payload:
+        lines.extend(
+            [
+                f"- ok: {payload['ok']}",
+                f"- failed: {payload['failed']}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"- price_fetch_succeeded: {int(payload.get('price_fetch_succeeded') or 0)}",
+                f"- price_fetch_failed: {int(payload.get('price_fetch_failed') or 0)}",
+                f"- decision_usable: {int(payload.get('decision_usable') or 0)}",
+                f"- decision_unusable: {int(payload.get('decision_unusable') or 0)}",
+                f"- decision_status: {payload.get('decision_status') or DATA_UNAVAILABLE}",
+            ]
+        )
     if payload.get("holdings") == REASON_HOLDINGS:
         lines.append(f"- holdings: {REASON_HOLDINGS}")
     if payload.get("reasons"):

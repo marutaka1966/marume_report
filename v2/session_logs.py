@@ -10,6 +10,31 @@ from v2.collect_report import quote_ok
 from v2.logstore import _reject_canonical_write
 
 
+def latest_log(
+    log_dir: str | Path,
+    *,
+    log_kind: str,
+    filename_prefix: str,
+) -> tuple[dict[str, Any], Path] | None:
+    """Newest readable collector log. Does not invent quotes."""
+    root = Path(log_dir).expanduser().resolve()
+    _reject_canonical_write(root)
+    matches = sorted(
+        root.glob(f"**/{filename_prefix}-*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in matches:
+        _reject_canonical_write(path)
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(document, dict) and document.get("log_kind") == log_kind:
+            return document, path
+    return None
+
+
 def find_complete_session_log(
     log_dir: str | Path,
     *,

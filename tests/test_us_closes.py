@@ -44,21 +44,21 @@ HOLDINGS_SAMPLE = """
 
 | 銘柄コード | 銘柄名 | 保有数量 |
 |------------|--------|----------|
-| 148A | ハッチ・ワーク | 200株 |
+| 1111 | テスト工業A | 10株 |
 
 ### 米国株
 
 | 銘柄コード | 銘柄名 | 保有数量 | 平均取得価格 | 取得金額 | 現在株価 | 評価額 | 含み損益 |
 |------------|--------|----------|--------------|----------|----------|--------|----------|
-| IRDM | IRDM | 100株 | 未確認 | 未確認 | 未確認 | 未確認 |
-| IREN | IREN | 16株 | 37.69 USD | 603.04 USD | 未確認 | 未確認 | 未確認 |
-| PLTR | PLTR | 50株 | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
+| TSTA | Test Asset A | 3株 | 12.34 USD | 37.02 USD | 未確認 | 未確認 | 未確認 |
+| TSTB | Test Asset B | 4株 | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
+| TSTC | Test Asset C | 5株 | 未確認 | 未確認 | 未確認 | 未確認 | 未確認 |
 
 ### 投資信託
 
 | 銘柄コード | 銘柄名 |
 |------------|--------|
-| 未確認 | eMAXIS Slim 米国株式（S&P500） |
+| 未確認 | テスト投信A |
 
 ## 2. 投資管理
 
@@ -66,7 +66,7 @@ HOLDINGS_SAMPLE = """
 
 | 銘柄コード | 銘柄名 |
 |------------|--------|
-| IREN | IREN |
+| TSTA | Test Asset A |
 """
 
 REAL_HOLDINGS = Path(
@@ -89,21 +89,20 @@ def _bars(*pairs: tuple[str, float]) -> dict:
 
 
 class HoldingsParseTests(unittest.TestCase):
-    def test_extracts_iren_and_ignores_japan_and_funds(self):
+    def test_extracts_us_and_ignores_japan_and_funds(self):
         tickers = parse_us_tickers(HOLDINGS_SAMPLE)
-        self.assertIn("IREN", tickers)
-        self.assertEqual(tickers, ["IRDM", "IREN", "PLTR"])
-        self.assertNotIn("148A", tickers)
+        self.assertEqual(tickers, ["TSTA", "TSTB", "TSTC"])
+        self.assertNotIn("1111", tickers)
         self.assertNotIn("未確認", tickers)
         self.assertNotEqual(set(tickers), set(SYMBOLS))
 
-    def test_real_holdings_includes_iren(self):
+    def test_real_holdings_parse_without_identifier_assumptions(self):
         if not REAL_HOLDINGS.is_file():
             self.skipTest("Holdings.md is not available locally")
         tickers = parse_us_tickers(REAL_HOLDINGS.read_text(encoding="utf-8"))
-        self.assertIn("IREN", tickers)
-        self.assertNotIn("148A", tickers)
         self.assertTrue(tickers)
+        self.assertTrue(all(isinstance(ticker, str) and ticker for ticker in tickers))
+        self.assertNotIn("未確認", tickers)
         self.assertNotEqual(set(tickers), set(SYMBOLS))
 
 
@@ -137,8 +136,8 @@ class SessionDateTests(unittest.TestCase):
 class CloseSelectionTests(unittest.TestCase):
     def test_ignores_intraday_and_unfinished_today_bar(self):
         payload = _bars(("2026-09-02", 10.0), ("2026-09-03", 999.0))
-        pre = collect_symbol("IREN", now=_ny(2026, 9, 3, 8, 0), fetch_bars=lambda _s: payload)
-        rth = collect_symbol("IREN", now=_ny(2026, 9, 3, 12, 0), fetch_bars=lambda _s: payload)
+        pre = collect_symbol("TSTA", now=_ny(2026, 9, 3, 8, 0), fetch_bars=lambda _s: payload)
+        rth = collect_symbol("TSTA", now=_ny(2026, 9, 3, 12, 0), fetch_bars=lambda _s: payload)
         self.assertEqual(pre["price"], 10.0)
         self.assertEqual(pre["price_date"], "2026-09-02")
         self.assertEqual(rth["price"], 10.0)
@@ -153,19 +152,19 @@ class CloseSelectionTests(unittest.TestCase):
             data["regularMarketPrice"] = 12.34
             return data
 
-        row = collect_symbol("IREN", now=_ny(2026, 9, 3, 17, 0), fetch_bars=fetch)
+        row = collect_symbol("TSTA", now=_ny(2026, 9, 3, 17, 0), fetch_bars=fetch)
         self.assertEqual(row["price"], 11.5)
         self.assertEqual(row["price_date"], "2026-09-03")
         self.assertEqual(row["session_status"], "regular_close_complete")
 
     def test_weekend_and_holiday_pick_last_completed_session(self):
         weekend = collect_symbol(
-            "IREN",
+            "TSTA",
             now=_ny(2026, 9, 5, 12, 0),
             fetch_bars=lambda _s: _bars(("2026-09-03", 10.0), ("2026-09-04", 11.0)),
         )
         holiday = collect_symbol(
-            "IREN",
+            "TSTA",
             now=_ny(2026, 11, 26, 12, 0),
             fetch_bars=lambda _s: _bars(("2026-11-25", 20.0), ("2026-11-26", 99.0)),
         )
@@ -176,7 +175,7 @@ class CloseSelectionTests(unittest.TestCase):
 
     def test_missing_session_bar_is_unavailable_not_backfilled(self):
         row = collect_symbol(
-            "IREN",
+            "TSTA",
             now=_ny(2026, 9, 3, 17, 0),
             fetch_bars=lambda _s: _bars(("2026-09-02", 10.0)),
         )
@@ -200,10 +199,10 @@ class CollectorTests(unittest.TestCase):
             collect_us_regular_closes(
                 now=_ny(2026, 9, 3, 17, 0),
                 log_dir=tmp,
-                tickers=["ZZQQ", "IREN"],
+                tickers=["ZZQQ", "TSTA"],
                 fetch_bars=fetch,
             )
-        self.assertEqual(called, ["ZZQQ", "IREN"])
+        self.assertEqual(called, ["ZZQQ", "TSTA"])
         self.assertNotIn("GOLD", called)
         self.assertNotIn("USDJPY", called)
         self.assertNotIn("US10Y", called)
@@ -218,12 +217,12 @@ class CollectorTests(unittest.TestCase):
             document = collect_us_regular_closes(
                 now=_ny(2026, 9, 3, 17, 0),
                 log_dir=tmp,
-                tickers=["IREN", "BAD", "PLTR"],
+                tickers=["TSTA", "BAD", "TSTB"],
                 fetch_bars=fetch,
             )
         by_symbol = {row["symbol"]: row for row in document["quotes"]}
-        self.assertEqual(by_symbol["IREN"]["price"], 5.0)
-        self.assertEqual(by_symbol["PLTR"]["price"], 5.0)
+        self.assertEqual(by_symbol["TSTA"]["price"], 5.0)
+        self.assertEqual(by_symbol["TSTB"]["price"], 5.0)
         self.assertEqual(by_symbol["BAD"]["price"], DATA_UNAVAILABLE)
         self.assertEqual(by_symbol["BAD"]["error"], "UNKNOWN_FETCH_ERROR")
         self.assertEqual(len(document["quotes"]), 3)
@@ -238,7 +237,7 @@ class CollectorTests(unittest.TestCase):
             document = collect_us_regular_closes(
                 now=_ny(2026, 9, 3, 17, 0),
                 log_dir=tmp,
-                tickers=["IREN", "BAD"],
+                tickers=["TSTA", "BAD"],
                 fetch_bars=fetch,
             )
         for row in document["quotes"]:
@@ -257,17 +256,17 @@ class CollectorTests(unittest.TestCase):
             first = collect_us_regular_closes(
                 now=_ny(2026, 9, 3, 17, 0),
                 log_dir=tmp,
-                tickers=["IREN", "PLTR"],
+                tickers=["TSTA", "TSTB"],
                 fetch_bars=fetch,
             )
             self.assertFalse(first.get("reused_log"))
-            self.assertEqual(called, ["IREN", "PLTR"])
+            self.assertEqual(called, ["TSTA", "TSTB"])
             self.assertEqual(len(list(Path(tmp).rglob("us-closes-*.json"))), 1)
             called.clear()
             second = collect_us_regular_closes(
                 now=_ny(2026, 9, 3, 17, 0),
                 log_dir=tmp,
-                tickers=["IREN", "PLTR"],
+                tickers=["TSTA", "TSTB"],
                 fetch_bars=fetch,
             )
             self.assertEqual(called, [])
@@ -290,17 +289,17 @@ class CollectorTests(unittest.TestCase):
             collect_us_regular_closes(
                 now=_ny(2026, 9, 3, 17, 0),
                 log_dir=tmp,
-                tickers=["IREN", "BAD"],
+                tickers=["TSTA", "BAD"],
                 fetch_bars=fetch,
             )
             second = collect_us_regular_closes(
                 now=_ny(2026, 9, 3, 17, 0),
                 log_dir=tmp,
-                tickers=["IREN"],
+                tickers=["TSTA"],
                 fetch_bars=fetch_ok,
             )
             self.assertFalse(second.get("reused_log"))
-            self.assertEqual(called, ["IREN"])
+            self.assertEqual(called, ["TSTA"])
 
     def test_rejects_ai_knowledge_log_path(self):
         with self.assertRaises(ValueError):
@@ -321,7 +320,7 @@ class FetchCauseTests(unittest.TestCase):
         self.assertEqual(classify_fetch_error(urllib.error.URLError(socket.gaierror(8, "nodename nor servname provided"))), DNS_ERROR)
         self.assertEqual(classify_fetch_error(urllib.error.URLError(ConnectionRefusedError())), CONNECTION_ERROR)
         self.assertEqual(classify_fetch_error(json.JSONDecodeError("x", "x", 0)), JSON_PARSE_ERROR)
-        self.assertEqual(classify_fetch_error(RuntimeError("secret https://example.invalid/IREN")), UNKNOWN_FETCH_ERROR)
+        self.assertEqual(classify_fetch_error(RuntimeError("secret https://example.invalid/TSTA")), UNKNOWN_FETCH_ERROR)
         self.assertEqual(FETCH_CAUSES, {
             HTTP_401, HTTP_403, HTTP_429, TIMEOUT, DNS_ERROR, CONNECTION_ERROR,
             JSON_PARSE_ERROR, MISSING_REGULAR_CLOSE, SESSION_NOT_COMPLETE, UNKNOWN_FETCH_ERROR,
@@ -331,13 +330,13 @@ class FetchCauseTests(unittest.TestCase):
         def forbidden(_symbol: str):
             raise urllib.error.HTTPError("https://example.invalid", 403, "x", EmailMessage(), io.BytesIO())
 
-        row = collect_symbol("IREN", now=_ny(2026, 9, 3, 17, 0), fetch_bars=forbidden)
+        row = collect_symbol("TSTA", now=_ny(2026, 9, 3, 17, 0), fetch_bars=forbidden)
         self.assertEqual(row["price"], DATA_UNAVAILABLE)
         self.assertEqual(row["error"], HTTP_403)
         self.assertNotIn("example.invalid", row["error"])
 
         missing = collect_symbol(
-            "IREN",
+            "TSTA",
             now=_ny(2026, 9, 3, 17, 0),
             fetch_bars=lambda _s: _bars(("2026-09-02", 10.0)),
         )
@@ -345,7 +344,7 @@ class FetchCauseTests(unittest.TestCase):
 
         with patch("v2.us_closes.last_completed_session_date", return_value=None):
             incomplete = collect_symbol(
-                "IREN",
+                "TSTA",
                 now=_ny(2026, 9, 3, 17, 0),
                 fetch_bars=lambda _s: _bars(("2026-09-03", 10.0)),
             )
@@ -385,8 +384,8 @@ class LocalVsActionsTests(unittest.TestCase):
         document = {
             "holdings_error": None,
             "quotes": [
-                _failed_us_row("IREN", HTTP_429),
-                _failed_us_row("PLTR", HTTP_429),
+                _failed_us_row("TSTA", HTTP_429),
+                _failed_us_row("TSTB", HTTP_429),
                 _failed_us_row("TSLA", TIMEOUT),
             ],
         }
@@ -398,8 +397,8 @@ class LocalVsActionsTests(unittest.TestCase):
             payload["reasons"],
             [{"reason": HTTP_429, "count": 2}, {"reason": TIMEOUT, "count": 1}],
         )
-        self.assertNotIn("IREN", dumped)
-        self.assertNotIn("PLTR", dumped)
+        self.assertNotIn("TSTA", dumped)
+        self.assertNotIn("TSTB", dumped)
         self.assertNotIn("TSLA", dumped)
         self.assertNotIn("yahoo", dumped)
         self.assertNotIn("query1", dumped)
@@ -414,9 +413,9 @@ class LocalVsActionsTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("HTTP_429", printed)
         self.assertIn("TIMEOUT", printed)
-        self.assertNotIn("IREN", printed)
+        self.assertNotIn("TSTA", printed)
         self.assertNotIn("yahoo", printed)
-        self.assertNotIn("IREN", text)
+        self.assertNotIn("TSTA", text)
         self.assertIn("HTTP_429 (2)", text)
         self.assertIn("TIMEOUT (1)", text)
 
