@@ -21,10 +21,12 @@ from v2.decision_input import (
     FRESHNESS_UNKNOWN,
     FUND_FRESHNESS,
     FUND_FRESHNESS_BASIS,
+    FUND_PUBLICATION_PENDING,
     INCOMPLETE_SESSION,
     MISSING_LOG,
     MISSING_QUOTE,
     STALE_SESSION,
+    STALE_FUND_DATA,
     STATUS_OK,
     STATUS_REVIEW,
     UNKNOWN_QUOTE_ERROR,
@@ -87,7 +89,7 @@ def _jp_quote(symbol: str, price: float | str, day: str = "2026-09-04") -> dict:
         "price": price,
         "currency": "JPY" if ok else DATA_UNAVAILABLE,
         "price_date": day if ok else DATA_UNAVAILABLE,
-        "observed_at": "2026-09-04T16:10:00+09:00",
+        "observed_at": f"{day}T16:10:00+09:00",
         "source": "test://jp",
         "freshness_status": "complete_session" if ok else DATA_UNAVAILABLE,
         "session_status": "regular_close_complete" if ok else DATA_UNAVAILABLE,
@@ -95,28 +97,34 @@ def _jp_quote(symbol: str, price: float | str, day: str = "2026-09-04") -> dict:
     }
 
 
-def _us_quote(symbol: str, price: float) -> dict:
+def _us_quote(symbol: str, price: float, day: str = "2026-09-04") -> dict:
     return {
         "symbol": symbol,
         "asset_type": "us_equity",
         "price": price,
         "currency": "USD",
-        "price_date": "2026-09-04",
-        "observed_at": "2026-09-05T07:00:00+09:00",
+        "price_date": day,
+        "observed_at": f"{day}T21:00:00+09:00",
         "source": "test://us",
         "freshness_status": "complete_session",
         "session_status": "regular_close_complete",
     }
 
 
-def _fund_quote(name: str, nav: float) -> dict:
+def _fund_quote(
+    name: str,
+    nav: float,
+    *,
+    day: str = "2026-09-04",
+    observed_at: str | None = None,
+) -> dict:
     return {
         "name": name,
         "asset_type": "investment_trust",
         "nav": nav,
         "currency": "JPY",
-        "price_date": "2026-09-04",
-        "observed_at": "2026-09-04T21:00:00+09:00",
+        "price_date": day,
+        "observed_at": observed_at or f"{day}T21:00:00+09:00",
         "source": "test://fund",
         "freshness_status": FUND_FRESHNESS,
         "freshness_basis": FUND_FRESHNESS_BASIS,
@@ -315,6 +323,130 @@ class DecisionInputTests(unittest.TestCase):
             self.assertEqual(row["price"], DATA_UNAVAILABLE)
             self.assertEqual(document["summary"]["price_fetch_succeeded"], 1)
             self.assertEqual(document["summary"]["decision_usable"], 0)
+
+    def test_old_official_fund_log_cannot_make_later_snapshot_ready(self):
+        holdings = {
+            "jp": [
+                {
+                    "symbol": "1111",
+                    "name": DATA_UNAVAILABLE,
+                    "quantity": DATA_UNAVAILABLE,
+                    "avg_cost": DATA_UNAVAILABLE,
+                    "cost_amount": DATA_UNAVAILABLE,
+                }
+            ],
+            "us": [
+                {
+                    "symbol": "TSTA",
+                    "name": DATA_UNAVAILABLE,
+                    "quantity": DATA_UNAVAILABLE,
+                    "avg_cost": DATA_UNAVAILABLE,
+                    "cost_amount": DATA_UNAVAILABLE,
+                }
+            ],
+            "funds": [
+                {
+                    "symbol": DATA_UNAVAILABLE,
+                    "name": "テスト投信A",
+                    "quantity": DATA_UNAVAILABLE,
+                    "avg_cost": DATA_UNAVAILABLE,
+                    "cost_amount": DATA_UNAVAILABLE,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_log(
+                root,
+                "jp-closes-1.json",
+                {"log_kind": "jp_regular_closes", "quotes": [_jp_quote("1111", 100.0, day="2026-09-11")]},
+            )
+            _write_log(
+                root,
+                "us-closes-1.json",
+                {"log_kind": "us_regular_closes", "quotes": [_us_quote("TSTA", 10.0, day="2026-09-11")]},
+            )
+            _write_log(
+                root,
+                "fund-nav-1.json",
+                {"log_kind": "fund_official_navs", "quotes": [_fund_quote("テスト投信A", 12345.0)]},
+            )
+            document = collect_decision_input(
+                now=_tokyo(2026, 9, 12, 22),
+                log_dir=root,
+                holdings=holdings,
+                write_markdown=False,
+            )
+        by_class = {row["asset_class"]: row for row in document["assets"]}
+        self.assertEqual(by_class[CLASS_JP]["usability_status"], STATUS_OK)
+        self.assertEqual(by_class[CLASS_US]["usability_status"], STATUS_OK)
+        self.assertEqual(by_class[CLASS_FUND]["collection_status"], STATUS_OK)
+        self.assertEqual(by_class[CLASS_FUND]["usability_status"], STALE_FUND_DATA)
+        self.assertEqual(document["summary"]["price_fetch_succeeded"], 3)
+        self.assertEqual(document["summary"]["decision_usable"], 2)
+        self.assertEqual(document["summary"]["decision_status"], STATUS_REVIEW)
+        self.assertEqual(
+            public_decision_summary(document)["reasons"],
+            [{"reason": STALE_FUND_DATA, "count": 1}],
+        )
+
+    def test_fund_freshness_allows_closure_and_prepublication_window(self):
+        holding = {
+            "symbol": DATA_UNAVAILABLE,
+            "name": "テスト投信A",
+            "quantity": DATA_UNAVAILABLE,
+            "avg_cost": DATA_UNAVAILABLE,
+            "cost_amount": DATA_UNAVAILABLE,
+        }
+        cases = (
+            (_tokyo(2026, 9, 22, 22), STATUS_OK),  # JP holiday: Sep 18 remains latest.
+            (_tokyo(2026, 9, 24, 20), STATUS_OK),  # Current-day NAV publication is still pending.
+            (_tokyo(2026, 9, 24, 22), FUND_PUBLICATION_PENDING),
+        )
+        for decision_at, expected_status in cases:
+            with self.subTest(decision_at=decision_at), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                quote = _fund_quote("テスト投信A", 12345.0, day="2026-09-18")
+                _write_log(root, "fund-nav-1.json", {"log_kind": "fund_official_navs", "quotes": [quote]})
+                document = collect_decision_input(
+                    now=decision_at,
+                    log_dir=root,
+                    holdings={"jp": [], "us": [], "funds": [holding]},
+                    write_markdown=False,
+                )
+                row = document["assets"][0]
+                self.assertEqual(row["usability_status"], expected_status)
+                self.assertEqual(
+                    document["summary"]["decision_usable"],
+                    1 if expected_status == STATUS_OK else 0,
+                )
+                self.assertEqual(document["summary"]["decision_status"], STATUS_REVIEW)
+
+    def test_fund_freshness_rejects_observation_before_price_date(self):
+        holding = {
+            "symbol": DATA_UNAVAILABLE,
+            "name": "テスト投信A",
+            "quantity": DATA_UNAVAILABLE,
+            "avg_cost": DATA_UNAVAILABLE,
+            "cost_amount": DATA_UNAVAILABLE,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            quote = _fund_quote(
+                "テスト投信A",
+                12345.0,
+                day="2026-09-11",
+                observed_at="2026-09-04T21:00:00+09:00",
+            )
+            _write_log(root, "fund-nav-1.json", {"log_kind": "fund_official_navs", "quotes": [quote]})
+            document = collect_decision_input(
+                now=_tokyo(2026, 9, 12, 22),
+                log_dir=root,
+                holdings={"jp": [], "us": [], "funds": [holding]},
+                write_markdown=False,
+            )
+        self.assertEqual(document["assets"][0]["usability_status"], FRESHNESS_UNKNOWN)
+        self.assertEqual(document["summary"]["decision_usable"], 0)
 
     def test_unknown_quote_error_is_sanitized(self):
         holding = {

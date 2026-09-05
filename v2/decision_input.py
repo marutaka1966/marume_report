@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,9 @@ from v2.collect_funds import LOG_KIND as FUND_LOG_KIND
 from v2.collect_report import print_local_log_line, quote_ok
 from v2.collect_us import LOG_KIND as US_LOG_KIND
 from v2.holdings import HOLDINGS_FILE, load_holding_rows
+from v2.jp_session import TOKYO, is_trading_day as is_jp_business_day
 from v2.jp_session import last_completed_session_date as jp_session_date
+from v2.jp_session import now_tokyo
 from v2.logstore import FORBIDDEN_PATH_PARTS, _reject_canonical_write
 from v2.session_logs import latest_log
 from v2.us_session import last_completed_session_date as us_session_date
@@ -31,6 +33,8 @@ MISSING_QUOTE = "MISSING_QUOTE"
 STALE_SESSION = "STALE_SESSION"
 INCOMPLETE_SESSION = "INCOMPLETE_SESSION"
 FRESHNESS_UNKNOWN = "FRESHNESS_UNKNOWN"
+FUND_PUBLICATION_PENDING = "FUND_PUBLICATION_PENDING"
+STALE_FUND_DATA = "STALE_FUND_DATA"
 UNKNOWN_QUOTE_ERROR = "UNKNOWN_QUOTE_ERROR"
 HOLDINGS_UNREAD = "HOLDINGS_UNREAD"
 
@@ -39,6 +43,10 @@ EQUITY_SESSION_STATUS = "regular_close_complete"
 EQUITY_FRESHNESS_BASIS = "target_completed_session"
 FUND_FRESHNESS = "latest_official_published"
 FUND_FRESHNESS_BASIS = "official_current_value"
+# The local official-NAV collector runs at 21:10 JST. Before 21:00, do not
+# require a same-day NAV; after 21:00, an older valuation stays review-only.
+# Fund-specific closure calendars are unavailable, so they are never guessed.
+FUND_PUBLICATION_CUTOFF = time(21, 0)
 
 PUBLIC_QUOTE_REASONS = frozenset(
     {
@@ -94,10 +102,12 @@ def build_decision_input(
     write_markdown: bool = True,
 ) -> dict[str, Any]:
     observed_at = datetime.now(timezone.utc).isoformat()
+    decision_at = now_tokyo(now)
     if holdings is None:
         holdings, holdings_error = load_holding_rows()
-    jp_date = _iso_or_unavailable(jp_session_date(now))
-    us_date = _iso_or_unavailable(us_session_date(now))
+    jp_date = _iso_or_unavailable(jp_session_date(decision_at))
+    us_date = _iso_or_unavailable(us_session_date(decision_at))
+    fund_expected_date = _iso_or_unavailable(_expected_fund_price_date(decision_at))
     jp_log, jp_path = _load_log(log_dir, JP_LOG_KIND, "jp-closes")
     us_log, us_path = _load_log(log_dir, US_LOG_KIND, "us-closes")
     fund_log, fund_path = _load_log(log_dir, FUND_LOG_KIND, "fund-nav")
@@ -120,6 +130,7 @@ def build_decision_input(
         holdings.get("funds") or [],
         quotes=_quote_map(fund_log, key="name"),
         log_present=fund_log is not None,
+        decision_at=decision_at,
     )
     assets = jp_assets + us_assets + fund_assets
     fund_dates = {
@@ -135,6 +146,7 @@ def build_decision_input(
         holdings_error,
         jp_session_date=jp_date,
         us_session_date=us_date,
+        decision_at=decision_at,
     )
     document = {
         "log_kind": LOG_KIND,
@@ -146,7 +158,12 @@ def build_decision_input(
             "us": str(us_path) if us_path else DATA_UNAVAILABLE,
             "funds": str(fund_path) if fund_path else DATA_UNAVAILABLE,
         },
-        "session_dates": {"jp": jp_date, "us": us_date, "funds": fund_date},
+        "session_dates": {
+            "jp": jp_date,
+            "us": us_date,
+            "funds": fund_date,
+            "funds_expected": fund_expected_date,
+        },
         "summary": summary,
         "assets": assets,
     }
@@ -271,6 +288,7 @@ def _merge_funds(
     *,
     quotes: dict[str, dict[str, Any]],
     log_present: bool,
+    decision_at: datetime,
 ) -> list[dict[str, Any]]:
     assets = []
     for holding in holdings:
@@ -283,6 +301,7 @@ def _merge_funds(
                 session_date=DATA_UNAVAILABLE,
                 log_present=log_present,
                 price_field="nav",
+                decision_at=decision_at,
             )
         )
     return assets
@@ -296,6 +315,7 @@ def _asset_from_quote(
     session_date: str,
     log_present: bool,
     price_field: str,
+    decision_at: datetime | None = None,
 ) -> dict[str, Any]:
     row = {
         "asset_class": asset_class,
@@ -352,8 +372,7 @@ def _asset_from_quote(
         else:
             row["freshness_basis"] = EQUITY_FRESHNESS_BASIS
     elif asset_class == CLASS_FUND:
-        if freshness != FUND_FRESHNESS or freshness_basis != FUND_FRESHNESS_BASIS:
-            row["usability_status"] = FRESHNESS_UNKNOWN
+        row["usability_status"] = _fund_usability_status(row, decision_at)
     if row["usability_status"] == STATUS_OK:
         row["price"] = price
         row["currency"] = currency
@@ -368,6 +387,7 @@ def _summary(
     *,
     jp_session_date: str,
     us_session_date: str,
+    decision_at: datetime,
 ) -> dict[str, Any]:
     def counts(rows: list[dict[str, Any]]) -> tuple[int, int]:
         fetched = sum(1 for row in rows if row["collection_status"] == STATUS_OK)
@@ -392,7 +412,7 @@ def _summary(
         and fund_assets
         and all(_ready_asset(row, expected_session_date=jp_session_date) for row in jp_assets)
         and all(_ready_asset(row, expected_session_date=us_session_date) for row in us_assets)
-        and all(_ready_asset(row) for row in fund_assets)
+        and all(_ready_asset(row, decision_at=decision_at) for row in fund_assets)
     )
     return {
         "price_fetch_succeeded": fetched,
@@ -416,7 +436,12 @@ def _summary(
     }
 
 
-def _ready_asset(row: dict[str, Any], *, expected_session_date: str | None = None) -> bool:
+def _ready_asset(
+    row: dict[str, Any],
+    *,
+    expected_session_date: str | None = None,
+    decision_at: datetime | None = None,
+) -> bool:
     if row["collection_status"] != STATUS_OK or row["usability_status"] != STATUS_OK:
         return False
     required = ("price", "currency", "price_date", "observed_at", "source", "freshness_status", "freshness_basis")
@@ -430,11 +455,79 @@ def _ready_asset(row: dict[str, Any], *, expected_session_date: str | None = Non
             and row.get("freshness_basis") == EQUITY_FRESHNESS_BASIS
         )
     if row.get("asset_class") == CLASS_FUND:
-        return (
-            row.get("freshness_status") == FUND_FRESHNESS
-            and row.get("freshness_basis") == FUND_FRESHNESS_BASIS
-        )
+        return _fund_usability_status(row, decision_at) == STATUS_OK
     return False
+
+
+def _fund_usability_status(row: dict[str, Any], decision_at: datetime | None) -> str:
+    if row.get("freshness_status") != FUND_FRESHNESS or row.get("freshness_basis") != FUND_FRESHNESS_BASIS:
+        return FRESHNESS_UNKNOWN
+    if decision_at is None:
+        return FRESHNESS_UNKNOWN
+    current = now_tokyo(decision_at)
+    expected = _expected_fund_price_date(current)
+    price_day = _parse_iso_date(row.get("price_date"))
+    observed = _parse_iso_datetime(row.get("observed_at"))
+    if expected is None or price_day is None or observed is None:
+        return FRESHNESS_UNKNOWN
+    observed_tokyo = observed.astimezone(TOKYO)
+    if observed_tokyo > current or observed_tokyo.date() < price_day:
+        return FRESHNESS_UNKNOWN
+    if price_day == expected or (
+        is_jp_business_day(current.date()) and price_day == current.date()
+    ):
+        return STATUS_OK
+    previous = _previous_jp_business_day(expected)
+    if (
+        is_jp_business_day(current.date())
+        and current.time() >= FUND_PUBLICATION_CUTOFF
+        and expected == current.date()
+        and price_day == previous
+    ):
+        return FUND_PUBLICATION_PENDING
+    return STALE_FUND_DATA
+
+
+def _expected_fund_price_date(decision_at: datetime) -> date | None:
+    current = now_tokyo(decision_at)
+    if is_jp_business_day(current.date()) and current.time() >= FUND_PUBLICATION_CUTOFF:
+        return current.date()
+    cursor = current.date() - timedelta(days=1)
+    for _ in range(14):
+        if is_jp_business_day(cursor):
+            return cursor
+        cursor -= timedelta(days=1)
+    return None
+
+
+def _previous_jp_business_day(day: date) -> date | None:
+    cursor = day - timedelta(days=1)
+    for _ in range(14):
+        if is_jp_business_day(cursor):
+            return cursor
+        cursor -= timedelta(days=1)
+    return None
+
+
+def _parse_iso_date(value: object) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_iso_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
 
 
 def _quote_status(quote: dict[str, Any]) -> str:
